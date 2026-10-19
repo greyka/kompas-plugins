@@ -274,7 +274,7 @@ namespace KompasPlugins
                 ShowSection();
             };
             var bFile = new Button { Text = "Открыть settings.ini", AutoSize = true };
-            bFile.Click += (s, e) => { SaveEditors(); Store.Save(); Process.Start("notepad.exe", "\"" + Store.File + "\""); };
+            bFile.Click += (s, e) => { SaveEditors(); Store.Save(); Py.OpenFile(this, Store.File); };
             lblStatus = new Label { AutoSize = true, ForeColor = Color.DimGray, Padding = new Padding(0, 8, 12, 0) };
             bar.Controls.AddRange(new Control[] { bSave, bReset, bFile, lblStatus });
 
@@ -513,6 +513,52 @@ namespace KompasPlugins
     // ---------- запуск Python (общий для окон) ----------
     static class Py
     {
+        // Открыть текстовый файл: программой по умолчанию, а если для расширения её нет — Блокнотом.
+        public static void OpenFile(Form owner, string path)
+        {
+            try { Process.Start(new ProcessStartInfo(path) { UseShellExecute = true }); return; }
+            catch { }
+            try { Process.Start("notepad.exe", "\"" + path + "\""); }
+            catch (Exception ex) { MessageBox.Show(owner, "Не удалось открыть файл:\n" + path + "\n\n" + ex.Message); }
+        }
+
+        // Показать текстовый файл (журнал) в своём окне — без Блокнота: новый Блокнот Windows 11
+        // на путях с кириллицей и пробелами отвечал «Системе не удается найти указанный путь».
+        public static void ShowText(Form owner, string path)
+        {
+            string text;
+            try
+            {
+                using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using (var sr = new StreamReader(fs, Encoding.UTF8))
+                    text = sr.ReadToEnd();
+            }
+            catch (Exception ex) { MessageBox.Show(owner, "Не удалось прочитать журнал:\n" + path + "\n\n" + ex.Message); return; }
+            var f = new Form
+            {
+                Text = "Журнал — " + Path.GetFileName(path), Font = owner.Font, StartPosition = FormStartPosition.CenterParent,
+                ClientSize = new Size(900, 560), ShowIcon = false, MinimizeBox = false
+            };
+            var tb = new TextBox
+            {
+                Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Both, WordWrap = false,
+                Font = new Font("Consolas", 9f), BackColor = SystemColors.Window,
+                Text = text.Replace("\r\n", "\n").Replace("\n", "\r\n")
+            };
+            var bar = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 42, Padding = new Padding(6), FlowDirection = FlowDirection.RightToLeft };
+            var bClose = new Button { Text = "Закрыть", AutoSize = true, DialogResult = DialogResult.Cancel };
+            var bFolder = new Button { Text = "Показать файл в папке", AutoSize = true };
+            bFolder.Click += (s, e) => Process.Start("explorer.exe", "/select,\"" + path + "\"");
+            var bCopy = new Button { Text = "Копировать всё", AutoSize = true };
+            bCopy.Click += (s, e) => { if (tb.Text.Length > 0) Clipboard.SetText(tb.Text); };
+            bar.Controls.AddRange(new Control[] { bClose, bFolder, bCopy });
+            f.Controls.Add(tb);
+            f.Controls.Add(bar);
+            f.CancelButton = bClose;
+            f.Shown += (s, e) => { tb.SelectionStart = tb.TextLength; tb.ScrollToCaret(); };
+            f.ShowDialog(owner);
+        }
+
         public static string Exe(string root, bool console)
         {
             var name = console ? "python.exe" : "pythonw.exe";
@@ -634,7 +680,7 @@ namespace KompasPlugins
             Py.Run(this, Root, "\"" + Script() + "\" --log-path" + PluginArg(), true, output =>
             {
                 var path = output.Trim().Split('\n').Last().Trim();
-                if (File.Exists(path)) Process.Start("notepad.exe", "\"" + path + "\"");
+                if (File.Exists(path)) Py.ShowText(this, path);
                 else lblStatus.Text = "Журнала пока нет: " + path;
             });
         }
