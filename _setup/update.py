@@ -175,10 +175,15 @@ def install(root, info):
             if os.path.isfile(os.path.join(src, f)):
                 put_file(os.path.join(src, f), os.path.join(root, f))
 
+        sys.path.insert(0, os.path.join(root, "_setup"))
+        import install as inst
+        try:
+            inst.install_updater(root)   # ярлыки менеджера и автообновления (могли появиться в новой версии)
+        except Exception:
+            traceback.print_exc()
+
         reg_note = ""
         if new_items or pending:
-            sys.path.insert(0, os.path.join(root, "_setup"))
-            import install as inst
             if inst.kompas_running():
                 with open(pending_file, "w", encoding="utf-8") as fh:
                     fh.write("\n".join(i[0] for i in new_items))

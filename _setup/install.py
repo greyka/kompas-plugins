@@ -141,6 +141,8 @@ def install_updater(root):
     if os.path.exists(pending):
         os.remove(pending)
     report = []
+    if os.environ.get("KP_NO_SHORTCUTS"):      # проверка во временной папке — без ярлыков
+        return "ярлыки пропущены (KP_NO_SHORTCUTS)"
     try:
         from win32com.client import Dispatch
         sh = Dispatch("WScript.Shell")
