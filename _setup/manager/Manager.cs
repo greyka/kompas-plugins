@@ -524,7 +524,7 @@ namespace KompasPlugins
 
         // Показать текстовый файл (журнал) в своём окне — без Блокнота: новый Блокнот Windows 11
         // на путях с кириллицей и пробелами отвечал «Системе не удается найти указанный путь».
-        public static void ShowText(Form owner, string path)
+        public static void ShowText(Form owner, string path, Action send = null)
         {
             string text;
             try
@@ -552,6 +552,14 @@ namespace KompasPlugins
             var bCopy = new Button { Text = "Копировать всё", AutoSize = true };
             bCopy.Click += (s, e) => { if (tb.Text.Length > 0) Clipboard.SetText(tb.Text); };
             bar.Controls.AddRange(new Control[] { bClose, bFolder, bCopy });
+            if (send != null)
+            {
+                // отправка — из окна отчёта (там комментарий и статус); журнал закрываем
+                var bSend = new Button { Text = "Отправить в Telegram", AutoSize = true, Font = new Font(owner.Font, FontStyle.Bold) };
+                bSend.Click += (s, e) => { f.Close(); send(); };
+                bar.Controls.Add(bSend);
+                f.AcceptButton = bSend;
+            }
             f.Controls.Add(tb);
             f.Controls.Add(bar);
             f.CancelButton = bClose;
@@ -680,7 +688,7 @@ namespace KompasPlugins
             Py.Run(this, Root, "\"" + Script() + "\" --log-path" + PluginArg(), true, output =>
             {
                 var path = output.Trim().Split('\n').Last().Trim();
-                if (File.Exists(path)) Py.ShowText(this, path);
+                if (File.Exists(path)) Py.ShowText(this, path, btnSend.Enabled ? (Action)Send : null);
                 else lblStatus.Text = "Журнала пока нет: " + path;
             });
         }
