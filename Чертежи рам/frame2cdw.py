@@ -19,6 +19,13 @@ from collections import OrderedDict
 
 from win32com.client import CastTo, gencache
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "_setup"))
+import kpsettings  # noqa: E402  настройки (settings.ini) и версия плагинов
+
+CFG = kpsettings.load()
+TITLE = f"Чертежи рам — версия {kpsettings.version()}"
+
 # --- константы API7 -------------------------------------------------------
 ksDocumentDrawing = 1
 vt_Arbitrary = 2
@@ -29,8 +36,17 @@ SCALES = [1, 2, 2.5, 4, 5, 10, 15, 20, 25, 40, 50, 75, 100]  # знаменат�
 FORMATS = [(3, 420, 297), (2, 594, 420), (1, 841, 594)]  # A3, A2, A1
 TABLE_W = 110  # ширина таблицы профилей, мм листа
 STAMP_H = 55   # высота основной надписи
-# сторона → (подпапка/подпись, зеркальная ли проекция относительно оси X модели)
+# сторона → (подпись вида, зеркальная ли проекция относительно оси X модели)
 SIDES = {"left": ("Вид слева", False), "right": ("Вид справа", True)}
+
+
+def side_folder(side):
+    """Имя подпапки для вида — из настроек (Общие → Подпапка «вид слева/справа»)."""
+    return CFG.get("general", "left_folder" if side == "left" else "right_folder") or SIDES[side][0]
+
+
+def out_folder_name():
+    return CFG.get("general", "out_folder") or "Чертежи"
 PROJECTIONS = ["#Сверху", "#Снизу", "#Спереди", "#Сзади", "#Слева", "#Справа"]
 
 
@@ -149,12 +165,14 @@ def classify(bodies, u, v):
 
 
 # --- чертёж ------------------------------------------------------------------
-MAX_SCALE = 25  # мельче 1:25 не уменьшаем — лучше взять лист больше
-
-
 def pick_layout(W, H):
-    for limit in (MAX_SCALE, SCALES[-1]):
-        for fmt, fw, fh in FORMATS:
+    """Наименьший лист (не меньше «Наименьший формат») и крупнейший масштаб,
+    но не мельче «Самый мелкий масштаб» (иначе — лист больше)."""
+    max_scale = int(CFG.get("frame", "max_scale"))
+    first = {"A3": 0, "A2": 1, "A1": 2}[CFG.get("frame", "min_format")]
+    formats = FORMATS[first:]
+    for limit in (max_scale, SCALES[-1]):
+        for fmt, fw, fh in formats:
             aw = fw - 20 - 5 - TABLE_W - 50   # рамка + таблица + поля под размеры
             ah = fh - 10 - STAMP_H - 50
             for n in SCALES:
@@ -305,12 +323,13 @@ def build_drawing(api7, a3d, info, bodies, out_cdw, side="left"):
     view.Update()
 
     sysdc = CastTo(views.View(0), "IDrawingContainer")
-    t = CastTo(sysdc.DrawingTexts.Add(), "IDrawingText")
-    t.X = view.X + (left + right) / 2 * scale
-    t.Y = min(view.Y + top_ * scale + 32, fh - 14)  # выше полок выносок, но внутри рамки
-    t.Allocation = 1  # по центру
-    CastTo(t, "IText").Str = title
-    t.Update()
+    if CFG.get("frame", "show_title"):
+        t = CastTo(sysdc.DrawingTexts.Add(), "IDrawingText")
+        t.X = view.X + (left + right) / 2 * scale
+        t.Y = min(view.Y + top_ * scale + 32, fh - 14)  # выше полок выносок, но внутри рамки
+        t.Allocation = 1  # по центру
+        CastTo(t, "IText").Str = title
+        t.Update()
 
     cont = CastTo(view, "ISymbols2DContainer")
     off = 10 / scale  # 10 мм листа в мм модели
@@ -325,6 +344,8 @@ def build_drawing(api7, a3d, info, bodies, out_cdw, side="left"):
     right_u = hi[u] if left_u == lo[u] else lo[u]
     # стойки — от начала профиля: грань, ближняя к нулевой (левой на виде) кромке рамы
     start = (lambda b: b["box"][u]) if left_u == lo[u] else (lambda b: b["box"][u + 3])
+    if CFG.get("frame", "ordinate_from") == "center":
+        start = lambda b: (b["box"][u] + b["box"][u + 3]) / 2  # noqa: E731
     xs = sorted({round(lo[u], 1), round(hi[u], 1)} |
                 {round(start(b), 1) for b in posts
                  if lo[u] + 1 < b["box"][u] and b["box"][u + 3] < hi[u] - 1})
@@ -334,10 +355,11 @@ def build_drawing(api7, a3d, info, bodies, out_cdw, side="left"):
 
     # габариты
     mark_len = 22 / scale
-    pa, pb = proj(lo[u], lo[v]), proj(hi[u], lo[v])
-    add_line_dim(cont, pa, pb, (pa[0], bottom - mark_len - off), ksLinDHorizontal)
-    pa, pb = proj(right_u, lo[v]), proj(right_u, hi[v])
-    add_line_dim(cont, pa, pb, (right + mark_len + off, pa[1]), ksLinDVertical)
+    if CFG.get("frame", "overall_dims"):
+        pa, pb = proj(lo[u], lo[v]), proj(hi[u], lo[v])
+        add_line_dim(cont, pa, pb, (pa[0], bottom - mark_len - off), ksLinDHorizontal)
+        pa, pb = proj(right_u, lo[v]), proj(right_u, hi[v])
+        add_line_dim(cont, pa, pb, (right + mark_len + off, pa[1]), ksLinDVertical)
 
     # позиционные выноски — по одной на позицию, на первом теле
     seen, placed = set(), []
@@ -346,6 +368,8 @@ def build_drawing(api7, a3d, info, bodies, out_cdw, side="left"):
         bx = b["box"]
         return abs((bx[u] + bx[u + 3]) / 2 - cu0) + abs((bx[v] + bx[v + 3]) / 2 - cv0)
     for bd in sorted(bodies, key=lambda b: (b["pos"] or 0, centrality(b))):
+        if not CFG.get("frame", "leaders"):
+            break
         if bd["pos"] is None or bd["pos"] in seen:
             continue
         seen.add(bd["pos"])
@@ -362,17 +386,21 @@ def build_drawing(api7, a3d, info, bodies, out_cdw, side="left"):
             print("  выноска", bd["pos"], e)
 
     # диагональ
-    pa, pb = proj(lo[u], lo[v]), proj(hi[u], hi[v])
-    add_line_dim(cont, pa, pb, ((pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2), ksLinDParallel)
+    if CFG.get("frame", "diagonal"):
+        pa, pb = proj(lo[u], lo[v]), proj(hi[u], hi[v])
+        add_line_dim(cont, pa, pb, ((pa[0] + pb[0]) / 2, (pa[1] + pb[1]) / 2), ksLinDParallel)
 
     # таблица профилей
     groups = OrderedDict()
     for b in sorted(bodies, key=lambda b: (b["pos"] or 999, b["sec"], -(b["L"] or 0))):
         key = (b["pos"], b["sec"], b["L"])
         groups[key] = groups.get(key, 0) + 1
-    for (pos, name), cnt in sorted(info.get("hardware", {}).items(), key=lambda kv: (kv[0][0] or 999, kv[0][1])):
-        groups[(pos, name, None)] = cnt
-    add_table(doc2d, groups, fw)
+    if CFG.get("frame", "hardware"):
+        for (pos, name), cnt in sorted(info.get("hardware", {}).items(),
+                                       key=lambda kv: (kv[0][0] or 999, kv[0][1])):
+            groups[(pos, name, None)] = cnt
+    if CFG.get("frame", "table"):
+        add_table(doc2d, groups, fw)
 
     # основная надпись
     try:
@@ -381,6 +409,11 @@ def build_drawing(api7, a3d, info, bodies, out_cdw, side="left"):
         if info.get("marking"):
             CastTo(stamp.Text(2), "IText").Str = info["marking"]
         CastTo(stamp.Text(6), "IText").Str = f"1:{n:g}"
+        # ячейки основной надписи: 110 — Разраб., 111 — Пров., 9 — организация
+        for cell, key in ((110, "designer"), (111, "checker"), (9, "organization")):
+            val = CFG.get("frame", key)
+            if val:
+                CastTo(stamp.Text(cell), "IText").Str = val
         stamp.Update()
     except Exception:
         pass
@@ -467,12 +500,14 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--no-pdf", action="store_true")
     ap.add_argument("--keep-open", action="store_true")
-    ap.add_argument("--sides", default="left,right", help="какие виды делать: left,right")
+    ap.add_argument("--sides", help="какие виды делать: left,right (по умолчанию — из настроек)")
     ap.add_argument("--open", action="store_true", help="открыть готовый чертёж в КОМПАС")
     ap.add_argument("--gui", action="store_true", help="итог и ошибки — окном (для запуска из меню)")
     ap.add_argument("--menu", type=int, help="команда из меню библиотеки КОМПАС (1..3)")
     ap.add_argument("--rot", help="имя КОМПАС в ROT (передаёт плагин)")
     a = ap.parse_args()
+    a.sides = a.sides or CFG.sides("frame")
+    a.no_pdf = a.no_pdf or not CFG.get("frame", "pdf")
     if a.menu:
         a.gui = True
     try:
@@ -495,6 +530,9 @@ def menu(a):
     doc = CastTo(doc, "IKompasDocument") if doc is not None else None
     path = doc.PathName if doc is not None else ""
 
+    if a.menu == 9:
+        kpsettings.open_manager("frame")
+        return
     if a.menu == 1:
         if not path.lower().endswith(".a3d"):
             msgbox("Откройте и сохраните сборку рамы (.a3d), затем повторите команду.")
@@ -502,15 +540,15 @@ def menu(a):
         if doc.Changed:
             r = ctypes.windll.user32.MessageBoxW(
                 None, "Сборка изменена. Сохранить перед построением чертежа?\n"
-                      "(вид чертежа строится по файлу на диске)", "Чертежи рам", 0x23)
+                      "(вид чертежа строится по файлу на диске)", TITLE, 0x23)
             if r == 2:      # Отмена
                 return
             if r == 6:      # Да
                 doc.Save()
-        a.src, a.open = path, True
+        a.src, a.open = path, CFG.get("frame", "open_after")
         run(a)
     elif a.menu == 2:
-        folder = pick_folder("Папка со сборками рам (.a3d). Чертежи появятся в подпапке «Чертежи».")
+        folder = pick_folder(f"Папка со сборками рам (.a3d). Чертежи появятся в подпапке «{out_folder_name()}».")
         if not folder:
             return
         a.src = folder
@@ -519,7 +557,7 @@ def menu(a):
         if not path:
             msgbox("Нет активного сохранённого документа.")
             return
-        d = os.path.join(os.path.dirname(path), "Чертежи")
+        d = os.path.join(os.path.dirname(path), out_folder_name())
         os.startfile(d if os.path.isdir(d) else os.path.dirname(path))
 
 
@@ -570,14 +608,15 @@ def kompas_running():
 
 def msgbox(text, error=False):
     import ctypes
-    ctypes.windll.user32.MessageBoxW(None, text, "Чертежи рам", 0x10 if error else 0x40)
+    ctypes.windll.user32.MessageBoxW(None, text, TITLE, 0x10 if error else 0x40)
 
 
 def run(a):
     src = os.path.abspath(a.src)
     files = [src] if os.path.isfile(src) else [
         os.path.join(src, f) for f in sorted(os.listdir(src)) if f.lower().endswith(".a3d")]
-    out = os.path.abspath(a.out or os.path.join(src if os.path.isdir(src) else os.path.dirname(src), "Чертежи"))
+    out = os.path.abspath(a.out or os.path.join(src if os.path.isdir(src) else os.path.dirname(src),
+                                                out_folder_name()))
     os.makedirs(out, exist_ok=True)
 
     if not files:
@@ -606,6 +645,8 @@ def run(a):
             api7.Documents.Open(c, True, False)
     if a.gui and (fail or len(files) > 1):  # одиночная сборка — без окна, чертежи откроются
         msg = f"Готово чертежей: {ok}, сборок: {len(files)}\nПапка: {out}"
+        if getattr(a, "skipped", 0):
+            msg += f"\nПропущено готовых: {a.skipped} (перезапись выключена в настройках)"
         if errors:
             msg += "\n\nОшибки:\n" + "\n".join(errors[:15])
         msgbox(msg, error=bool(fail))
@@ -628,9 +669,13 @@ def process(api7, a, files, out):
             continue
         last_cdw = []
         for side in sides:
-            sub = os.path.join(out, SIDES[side][0])
+            sub = os.path.join(out, side_folder(side))
             os.makedirs(sub, exist_ok=True)
             cdw = os.path.join(sub, base + ".cdw")
+            if os.path.exists(cdw) and not CFG.get("general", "overwrite"):
+                a.skipped = getattr(a, "skipped", 0) + 1
+                print(f"--  {base} [{SIDES[side][0]}]: уже есть, пропуск")
+                continue
             try:
                 doc2d, stat = build_drawing(api7, f, info, bodies, cdw, side)
                 if not a.no_pdf:

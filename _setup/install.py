@@ -120,37 +120,53 @@ def main():
         "\n\nЗапустите КОМПАС: меню «Приложения».")
 
 
+ROOT_FILES = ("Обновить.bat", "ПРОЧТИ.txt", "VERSION", "CHANGELOG.md", "Менеджер плагинов КОМПАС.exe")
+
+
 def install_updater(root):
-    """Обновлятор с GitHub: _setup и «Обновить.bat» в корень, ярлык в автозагрузку Windows."""
+    """Обновлятор и менеджер: _setup и файлы корня в <корень>, ярлыки — Автозагрузка (обновление),
+    меню «Пуск» и рабочий стол (менеджер). Файл настроек settings.ini не трогаем."""
     copy_tree(os.path.join(PLUGINS_DIR, "_setup"), os.path.join(root, "_setup"))
-    for f in ("Обновить.bat", "ПРОЧТИ.txt"):
+    for f in ROOT_FILES:
         src = os.path.join(PLUGINS_DIR, f)
         if os.path.isfile(src) and not same_path(src, os.path.join(root, f)):
             shutil.copy2(src, os.path.join(root, f))
-    # версия: если ставим из git-копии — её коммит, иначе первое обновление перезальёт всё
-    try:
-        sha = subprocess.run(["git", "-C", PLUGINS_DIR, "rev-parse", "HEAD"], capture_output=True,
-                             text=True, creationflags=0x08000000).stdout.strip()
-        if len(sha) == 40:
-            with open(os.path.join(root, "version.txt"), "w", encoding="utf-8") as f:
-                f.write(sha + "\n")
-    except OSError:
-        pass
+    # что установлено: версия из VERSION (= тег релиза vX.Y.Z), чтобы обновлятор не качал её повторно
+    ver_src = os.path.join(PLUGINS_DIR, "VERSION")
+    if os.path.isfile(ver_src):
+        ver = open(ver_src, encoding="utf-8").read().strip()
+        with open(os.path.join(root, "version.txt"), "w", encoding="utf-8") as f:
+            f.write(f"v{ver}\n{ver}\nустановлено из папки\n")
     pending = os.path.join(root, "register_pending.txt")
     if os.path.exists(pending):
         os.remove(pending)
+    report = []
     try:
         from win32com.client import Dispatch
-        startup = os.path.join(os.environ["APPDATA"], r"Microsoft\Windows\Start Menu\Programs\Startup")
-        lnk = Dispatch("WScript.Shell").CreateShortcut(os.path.join(startup, "Обновление плагинов КОМПАС.lnk"))
-        lnk.TargetPath = os.path.join(root, "Python", "pythonw.exe")
-        lnk.Arguments = f'"{os.path.join(root, "_setup", "update.py")}" --root "{root}" --auto'
-        lnk.WorkingDirectory = root
-        lnk.Description = "Проверка обновлений плагинов КОМПАС на GitHub"
-        lnk.Save()
-        return "✓ Автообновление с GitHub — при входе в Windows (вручную: «Обновить.bat»)"
+        sh = Dispatch("WScript.Shell")
+
+        def shortcut(folder, name, target, args, desc, icon=None):
+            lnk = sh.CreateShortcut(os.path.join(folder, name + ".lnk"))
+            lnk.TargetPath, lnk.Arguments, lnk.WorkingDirectory, lnk.Description = target, args, root, desc
+            if icon:
+                lnk.IconLocation = icon
+            lnk.Save()
+
+        programs = os.path.join(os.environ["APPDATA"], r"Microsoft\Windows\Start Menu\Programs")
+        shortcut(os.path.join(programs, "Startup"), "Обновление плагинов КОМПАС",
+                 os.path.join(root, "Python", "pythonw.exe"),
+                 f'"{os.path.join(root, "_setup", "update.py")}" --root "{root}" --auto',
+                 "Проверка обновлений плагинов КОМПАС на GitHub")
+        report.append("✓ Автообновление с GitHub — при входе в Windows (вкл./выкл. — в менеджере)")
+        exe = os.path.join(root, "Менеджер плагинов КОМПАС.exe")
+        if os.path.isfile(exe):
+            desktop = sh.SpecialFolders("Desktop")
+            for folder in (programs, desktop):
+                shortcut(folder, "Менеджер плагинов КОМПАС", exe, "", "Плагины КОМПАС: настройки, версия, обновление", exe)
+            report.append("✓ Менеджер плагинов — ярлык на рабочем столе и в меню «Пуск»")
     except Exception as e:
-        return f"✗ Автообновление не настроено: {e} (обновлять вручную: «Обновить.bat»)"
+        report.append(f"✗ Ярлыки не созданы: {e} (обновлять вручную: «Обновить.bat»)")
+    return "\n".join(report)
 
 
 if __name__ == "__main__":

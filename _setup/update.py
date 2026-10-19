@@ -2,14 +2,20 @@
 """Обновление плагинов КОМПАС-3D с GitHub (git на компьютере не нужен).
 
 Запуск:  <корень>\\Python\\pythonw.exe <корень>\\_setup\\update.py --root <корень> [--auto]
-  --auto  — тихий режим (автозагрузка Windows): окно только если что-то обновилось или ошибка.
+  --auto   — автозагрузка Windows: молча, окно только если обновилось или ошибка;
+             ничего не делает, если в настройках выключено «Проверять обновления».
+  --check  — только узнать версии (JSON в stdout) — для «Менеджера плагинов».
+  --quiet  — без окон (вывод в консоль).
+  --force  — поставить заново, даже если версия та же.
 
-1. Узнаёт последний коммит ветки (api.github.com). Совпадает с <корень>\\version.txt — выход.
-2. Скачивает архив ветки (codeload.github.com), распаковывает во временную папку.
-3. Копирует папки плагинов (с plugin.ini) и _setup в <корень>.
-   .rtw, занятая открытым КОМПАС, переименовывается в *.old (Windows это позволяет)
-   и заменяется — новая версия подхватится после перезапуска КОМПАС.
-4. Новые плагины подключает в КОМПАС (если он закрыт; иначе — при следующем обновлении).
+Канал (настройки → Обновление → «Что устанавливать»):
+  releases — только выпущенные версии (релизы GitHub, тег vX.Y.Z) — по умолчанию;
+  main     — последние изменения ветки main.
+
+Что делает: скачивает архив версии, копирует папки плагинов (с plugin.ini), _setup и файлы
+корня (VERSION, CHANGELOG.md, менеджер, …) в <корень>. Файл настроек settings.ini не трогает.
+.rtw / .exe, занятые открытым КОМПАС или менеджером, переименовываются в *.old и заменяются —
+новая версия заработает после перезапуска. Новые плагины подключаются в КОМПАС, если он закрыт.
 """
 import argparse
 import configparser
@@ -22,20 +28,18 @@ import shutil
 import sys
 import tempfile
 import traceback
+import urllib.error
 import urllib.request
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 TITLE = "Обновление плагинов КОМПАС"
-AUTO = False
-QUIET = False   # --quiet: вообще без окон (проверка/автоматизация)
+ROOT_FILES = ("VERSION", "CHANGELOG.md", "ПРОЧТИ.txt", "Обновить.bat", "Менеджер плагинов КОМПАС.exe")
+AUTO = QUIET = False
 
 
 def msg(text, flags=0x40):
-    if QUIET:
-        print(text)
-        return 1
-    if AUTO and not flags & 0x10 and not text.startswith("Плагины обновлены"):
+    if QUIET or (AUTO and not flags & 0x10 and not text.startswith("Плагины обновлены")):
         print(text)
         return 1
     return ctypes.windll.user32.MessageBoxW(None, text, TITLE, flags | 0x40000)  # поверх окон
@@ -47,15 +51,51 @@ def get(url, timeout=30):
         return r.read()
 
 
-def config():
+def repo_config():
     cp = configparser.ConfigParser(inline_comment_prefixes=(";",))
     cp.read(os.path.join(HERE, "update.ini"), encoding="utf-8")
     return cp["update"]["repo"].strip(), cp["update"].get("branch", "main").strip()
 
 
-def latest_commit(repo, branch):
-    data = json.loads(get(f"https://api.github.com/repos/{repo}/commits/{branch}"))
-    return data["sha"], data["commit"]["message"].splitlines()[0]
+def user_setting(root, key, default):
+    cp = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=(";",))
+    cp.read(os.path.join(root, "settings.ini"), encoding="utf-8-sig")
+    return cp.get("update", key, fallback=default).strip() or default
+
+
+def installed(root):
+    """(id, версия) установленной копии: id — тег или коммит из version.txt."""
+    vid = ""
+    if os.path.isfile(os.path.join(root, "version.txt")):
+        vid = open(os.path.join(root, "version.txt"), encoding="utf-8").read().split("\n")[0].strip()
+    ver = "?"
+    if os.path.isfile(os.path.join(root, "VERSION")):
+        ver = open(os.path.join(root, "VERSION"), encoding="utf-8").read().strip()
+    return vid, ver
+
+
+def latest(repo, branch, channel):
+    """→ dict(id, version, title, notes, zip, channel). Нет релизов — берём ветку."""
+    if channel == "releases":
+        try:
+            r = json.loads(get(f"https://api.github.com/repos/{repo}/releases/latest"))
+            tag = r["tag_name"]
+            return dict(id=tag, version=tag.lstrip("vV"), title=r.get("name") or tag,
+                        notes=(r.get("body") or "").strip(), channel="releases",
+                        zip=f"https://codeload.github.com/{repo}/zip/refs/tags/{tag}")
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+    c = json.loads(get(f"https://api.github.com/repos/{repo}/commits/{branch}"))
+    sha = c["sha"]
+    try:
+        ver = get(f"https://raw.githubusercontent.com/{repo}/{sha}/VERSION").decode("utf-8").strip()
+    except Exception:
+        ver = "?"
+    return dict(id=sha, version=f"{ver} ({sha[:7]})", title=c["commit"]["message"].split("\n")[0],
+                notes="\n".join(l for l in c["commit"]["message"].strip().split("\n")
+                                if not l.lower().startswith("co-authored-by")).strip(), channel="main",
+                zip=f"https://codeload.github.com/{repo}/zip/{sha}")
 
 
 def read_ini(path):
@@ -72,21 +112,19 @@ def same_file(a, b):
 
 
 def put_file(src, dst):
-    """Копирует файл; занятый (загруженная КОМПАС .rtw) — переименовывает в .old и кладёт новый."""
+    """Копирует файл; занятый (загруженная .rtw, запущенный .exe) — в .old и кладёт новый."""
     if same_file(src, dst):
         return False
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     try:
         shutil.copy2(src, dst)
     except PermissionError:
-        old = dst + ".old"
-        n = 1
+        old, n = dst + ".old", 1
         while os.path.exists(old):
             try:
                 os.remove(old)
             except OSError:
-                old = f"{dst}.old{n}"
-                n += 1
+                old, n = f"{dst}.old{n}", n + 1
         os.replace(dst, old)
         shutil.copy2(src, dst)
     return True
@@ -103,45 +141,20 @@ def put_tree(src, dst):
 
 
 def cleanup_old(root):
-    for f in glob.glob(os.path.join(root, "*", "*.old*")):
+    for f in glob.glob(os.path.join(root, "*.old*")) + glob.glob(os.path.join(root, "*", "*.old*")):
         try:
             os.remove(f)
         except OSError:
-            pass   # ещё занят КОМПАС — удалим в следующий раз
+            pass   # ещё занят — удалим в следующий раз
 
 
-def main():
-    global AUTO
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--root", default=os.path.dirname(HERE))
-    ap.add_argument("--auto", action="store_true")
-    ap.add_argument("--force", action="store_true", help="обновить, даже если версия та же")
-    ap.add_argument("--quiet", action="store_true")
-    a = ap.parse_args()
-    global QUIET
-    AUTO, QUIET = a.auto, a.quiet
-    root = os.path.abspath(a.root)
-    cleanup_old(root)
-
-    repo, branch = config()
-    ver_file = os.path.join(root, "version.txt")
-    current = open(ver_file, encoding="utf-8").read().split()[0] if os.path.isfile(ver_file) else ""
-    try:
-        sha, title = latest_commit(repo, branch)
-    except Exception as e:
-        if AUTO:
-            return               # нет интернета при входе в Windows — молча
-        msg(f"Не удалось связаться с GitHub ({repo}):\n{e}", 0x10)
-        return
-    pending = os.path.isfile(os.path.join(root, "register_pending.txt"))
-    if sha == current and not a.force and not pending:
-        msg(f"Плагины уже последней версии ({sha[:7]}).")
-        return
-
+def install(root, info):
     tmp = tempfile.mkdtemp(prefix="kp_update_")
     try:
-        zipfile.ZipFile(io.BytesIO(get(f"https://codeload.github.com/{repo}/zip/refs/heads/{branch}", 120))).extractall(tmp)
-        src = os.path.join(tmp, os.listdir(tmp)[0])          # <repo>-<branch>\
+        zipfile.ZipFile(io.BytesIO(get(info["zip"], 180))).extractall(tmp)
+        src = os.path.join(tmp, os.listdir(tmp)[0])          # <repo>-<версия>\
+        pending_file = os.path.join(root, "register_pending.txt")
+        pending = os.path.isfile(pending_file)
 
         updated, new_items, all_items = [], [], []
         for name in sorted(os.listdir(src)):
@@ -158,34 +171,76 @@ def main():
             if is_new:
                 new_items.append(item)
         put_tree(os.path.join(src, "_setup"), os.path.join(root, "_setup"))
-        for f in ("ПРОЧТИ.txt", "Обновить.bat"):
+        for f in ROOT_FILES:
             if os.path.isfile(os.path.join(src, f)):
                 put_file(os.path.join(src, f), os.path.join(root, f))
 
-        # подключить новые плагины в КОМПАС (нужно, чтобы КОМПАС был закрыт)
         reg_note = ""
         if new_items or pending:
             sys.path.insert(0, os.path.join(root, "_setup"))
-            import install
-            if install.kompas_running():
-                open(os.path.join(root, "register_pending.txt"), "w", encoding="utf-8").write(
-                    "\n".join(i[0] for i in new_items))
-                reg_note = ("\n\nНовые плагины появятся в меню после того, как вы закроете КОМПАС "
-                            "и снова запустите «Обновить.bat».")
+            import install as inst
+            if inst.kompas_running():
+                with open(pending_file, "w", encoding="utf-8") as fh:
+                    fh.write("\n".join(i[0] for i in new_items))
+                reg_note = ("\n\nНовые плагины появятся в меню КОМПАС после того, как вы закроете "
+                            "КОМПАС и ещё раз нажмёте «Обновить».")
             else:
-                reg_note = "\n\n" + "\n".join(install.register_in_kompas(all_items))
-                try:
-                    os.remove(os.path.join(root, "register_pending.txt"))
-                except OSError:
-                    pass
+                reg_note = "\n\n" + "\n".join(inst.register_in_kompas(all_items))
+                if os.path.exists(pending_file):
+                    os.remove(pending_file)
 
-        with open(ver_file, "w", encoding="utf-8") as f:
-            f.write(f"{sha}\n{title}\n")
-        changes = ", ".join(updated) if updated else "служебные файлы"
-        msg(f"Плагины обновлены до версии {sha[:7]}:\n«{title}»\n\nОбновлено: {changes}{reg_note}"
-            "\n\nЕсли КОМПАС открыт — перезапустите его.")
+        with open(os.path.join(root, "version.txt"), "w", encoding="utf-8") as f:
+            f.write(f"{info['id']}\n{info['version']}\n{info['title']}\n")
+        return updated, reg_note
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def main():
+    global AUTO, QUIET
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", default=os.path.dirname(HERE))
+    ap.add_argument("--auto", action="store_true")
+    ap.add_argument("--check", action="store_true")
+    ap.add_argument("--force", action="store_true")
+    ap.add_argument("--quiet", action="store_true")
+    a = ap.parse_args()
+    AUTO, QUIET = a.auto, a.quiet or a.check
+    root = os.path.abspath(a.root)
+    if a.auto and user_setting(root, "auto", "true").lower() not in ("1", "true", "yes", "да", "on"):
+        return
+    cleanup_old(root)
+
+    repo, branch = repo_config()
+    channel = user_setting(root, "channel", "releases")
+    cur_id, cur_ver = installed(root)
+    try:
+        info = latest(repo, branch, channel)
+    except Exception as e:
+        if a.check:
+            print(json.dumps(dict(error=str(e), installed_version=cur_ver), ensure_ascii=False))
+        elif not AUTO:
+            msg(f"Не удалось связаться с GitHub ({repo}):\n{e}", 0x10)
+        return
+    pending = os.path.isfile(os.path.join(root, "register_pending.txt"))
+    available = info["id"] != cur_id
+
+    if a.check:
+        print(json.dumps(dict(installed_version=cur_ver, installed_id=cur_id,
+                              latest_version=info["version"], latest_id=info["id"],
+                              title=info["title"], notes=info["notes"], channel=info["channel"],
+                              update_available=available, register_pending=pending,
+                              repo=repo), ensure_ascii=False))
+        return
+    if not available and not a.force and not pending:
+        msg(f"Установлена последняя версия: {cur_ver}.")
+        return
+
+    updated, reg_note = install(root, info)
+    changes = ", ".join(updated) if updated else "служебные файлы"
+    notes = f"\n\n{info['notes'][:1500]}" if info["notes"] and info["notes"] != info["title"] else ""
+    msg(f"Плагины обновлены: {cur_ver} → {info['version']}\n«{info['title']}»{notes}"
+        f"\n\nОбновлено: {changes}{reg_note}\n\nЕсли КОМПАС открыт — перезапустите его.")
 
 
 if __name__ == "__main__":

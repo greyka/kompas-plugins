@@ -14,3 +14,7 @@ __pycache__/
 *.bak
 python.txt
 Чертежи/
+# файлы конкретного компьютера
+settings.ini
+version.txt
+register_pending.txt

@@ -27,7 +27,8 @@ import frame2cdw as fd  # noqa: E402
 from pypdf import PdfReader, PdfWriter  # noqa: E402
 from win32com.client import CastTo  # noqa: E402
 
-TITLE = "PDF из чертежей"
+CFG, kpsettings = fd.CFG, fd.kpsettings
+TITLE = f"PDF из чертежей — версия {kpsettings.version()}"
 ksDocumentDrawing = 1
 
 
@@ -109,7 +110,8 @@ def make_pdf(api7, files, target):
                 start = len(w.pages)
                 for page in PdfReader(pdf).pages:
                     w.add_page(page)
-                w.add_outline_item(name, start)
+                if CFG.get("pdf", "bookmarks"):
+                    w.add_outline_item(name, start)
                 done += 1
             except Exception as e:
                 errors.append(f"{name}: {e}")
@@ -143,9 +145,16 @@ def run(files, target, rot=None, gui=False, open_pdf=False):
     print(text)
     if gui and (errors or not done):
         msgbox(text, error=True)
-    if open_pdf and done:
+    if open_pdf and done and CFG.get("pdf", "open_pdf"):
         os.startfile(target)
+    elif gui and done and not errors:
+        msgbox(text)
     return target
+
+
+def sort_files(files):
+    """«Ст2» раньше «Ст10» (настройка «Сортировка»), иначе — по алфавиту."""
+    return sorted(files, key=natural_key if CFG.get("pdf", "natural_sort") else str.lower)
 
 
 def open_drawings(api7):
@@ -178,8 +187,11 @@ def menu(a):
     doc = api7.ActiveDocument
     cur = CastTo(doc, "IKompasDocument").PathName if doc is not None else ""
     start_dir = os.path.dirname(cur) if cur else ""
+    if a.menu == 9:
+        kpsettings.open_manager("pdf")
+        return
     if a.menu == 1:
-        files = sorted(collect(ask_drawings(start_dir)), key=natural_key)
+        files = sort_files(collect(ask_drawings(start_dir)))
     elif a.menu == 2:
         files = open_drawings(api7)
         if not files:
@@ -187,7 +199,7 @@ def menu(a):
             return
     elif a.menu == 3:
         folder = fd.pick_folder("Папка с чертежами (.cdw, включая подпапки) → один PDF")
-        files = sorted(collect([folder]), key=natural_key) if folder else []
+        files = sort_files(collect([folder])) if folder else []
         if folder and not files:
             msgbox(f"В папке нет чертежей .cdw:\n{folder}")
             return
@@ -215,7 +227,7 @@ def main():
         elif a.src:
             files = collect(a.src)
             if len(a.src) == 1 and os.path.isdir(a.src[0]):
-                files.sort(key=natural_key)
+                files = sort_files(files)
             target = a.out or os.path.join(os.path.dirname(files[0]) if files else ".", "Чертежи.pdf")
             run(files, target)
         else:

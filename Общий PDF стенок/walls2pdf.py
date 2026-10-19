@@ -26,7 +26,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), "Чертежи рам"))
 import frame2cdw as fd  # noqa: E402
 from pypdf import PdfReader, PdfWriter  # noqa: E402
 
-TITLE = "Общий PDF стенок"
+CFG, kpsettings = fd.CFG, fd.kpsettings
+TITLE = f"Общий PDF стенок — версия {kpsettings.version()}"
 
 
 def msgbox(text, error=False):
@@ -56,7 +57,7 @@ def build_all(api7, files, out, sides):
             continue
         for side in sides:
             title = fd.SIDES[side][0]
-            sub = os.path.join(out, title)
+            sub = os.path.join(out, fd.side_folder(side))
             os.makedirs(sub, exist_ok=True)
             cdw = os.path.join(sub, base + ".cdw")
             try:
@@ -90,15 +91,18 @@ def merge_pdf(pages, target):
     return len(w.pages)
 
 
-def run(src, out=None, sides="left,right", rot=None, gui=False, open_pdf=False):
+def run(src, out=None, sides=None, rot=None, gui=False, open_pdf=False):
+    sides = sides or CFG.sides("walls")
+    open_pdf = open_pdf and CFG.get("walls", "open_pdf")
     src = os.path.abspath(src)
     files = list_assemblies(src)
     if not files:
         raise RuntimeError(f"Нет сборок .a3d: {src}")
     folder = src if os.path.isdir(src) else os.path.dirname(src)
-    out = os.path.abspath(out or os.path.join(folder, "Чертежи"))
+    out = os.path.abspath(out or os.path.join(folder, fd.out_folder_name()))
     os.makedirs(out, exist_ok=True)
-    target = os.path.join(out, f"{os.path.basename(folder)} — все стенки.pdf")
+    name = (CFG.get("walls", "pdf_name") or "{папка} — все стенки").replace("{папка}", os.path.basename(folder))
+    target = os.path.join(out, name + ".pdf")
     side_list = [s.strip() for s in sides.split(",") if s.strip()]
 
     api7, started = fd.connect_kompas(rot)
@@ -140,6 +144,9 @@ def menu(a):
     api7, _ = fd.connect_kompas(a.rot)
     doc = api7.ActiveDocument
     path = fd.CastTo(doc, "IKompasDocument").PathName if doc is not None else ""
+    if a.menu == 9:
+        kpsettings.open_manager("walls")
+        return
     if a.menu == 1:
         if not path:
             msgbox("Откройте любую сохранённую сборку из папки со стенками и повторите команду.")
@@ -153,7 +160,7 @@ def menu(a):
         if not path:
             msgbox("Нет активного сохранённого документа.")
             return
-        d = os.path.join(os.path.dirname(path), "Чертежи")
+        d = os.path.join(os.path.dirname(path), fd.out_folder_name())
         os.startfile(d if os.path.isdir(d) else os.path.dirname(path))
 
 
@@ -161,7 +168,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src", nargs="?")
     ap.add_argument("--out")
-    ap.add_argument("--sides", default="left,right")
+    ap.add_argument("--sides", help="left,right (по умолчанию — из настроек)")
     ap.add_argument("--menu", type=int)
     ap.add_argument("--rot")
     a = ap.parse_args()

@@ -9,6 +9,7 @@ BEGIN
     MENUITEM "Выбрать чертежи → один PDF...",         1
     MENUITEM "Открытые чертежи → один PDF...",        2
     MENUITEM "Все чертежи из папки → один PDF...",    3
+    MENUITEM "Настройки и версия...",                9
 END
 
 STRINGTABLE

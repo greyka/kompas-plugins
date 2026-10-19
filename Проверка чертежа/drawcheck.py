@@ -25,9 +25,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(HERE), "Чертежи рам"))
 import frame2cdw as fd  # noqa: E402
 from win32com.client import CastTo, Dispatch, gencache  # noqa: E402
 
-TITLE = "Проверка чертежа"
-TOUCH_GAP = 1.0      # мм листа: ближе — «вплотную»
-OVERLAP_MIN = 0.15   # доля площади меньшей надписи — считаем наложением
+CFG, kpsettings = fd.CFG, fd.kpsettings
+TITLE = f"Проверка чертежа — версия {kpsettings.version()}"
+TOUCH_GAP = CFG.get("check", "touch_gap")            # мм листа: ближе — «вплотную»
+OVERLAP_MIN = CFG.get("check", "overlap_min") / 100  # доля площади меньшей надписи — наложение
 FORMATS_MM = {1: (841, 594), 2: (594, 420), 3: (420, 297), 4: (297, 210)}
 
 
@@ -375,8 +376,10 @@ def run(src, rot=None, gui=False):
     with open(target, "w", encoding="utf-8-sig") as fh:
         fh.write(body)
     print(f"Справка: {target}")
-    if gui:
+    if gui and CFG.get("check", "open_report"):
         os.startfile(target)
+    elif gui:
+        msgbox(f"Проверено чертежей: {len(files)}\nСправка: {target}")
     return target
 
 
@@ -385,6 +388,9 @@ def menu(a):
     api7, _ = fd.connect_kompas(a.rot)
     doc = api7.ActiveDocument
     path = CastTo(doc, "IKompasDocument").PathName if doc is not None else ""
+    if a.menu == 9:
+        kpsettings.open_manager("check")
+        return
     if a.menu == 1:
         if not path.lower().endswith(".cdw"):
             msgbox("Откройте сохранённый чертёж (.cdw) и повторите команду.")
