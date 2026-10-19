@@ -28,9 +28,13 @@ import zipfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 TITLE = "Обновление плагинов КОМПАС"
 AUTO = False
+QUIET = False   # --quiet: вообще без окон (проверка/автоматизация)
 
 
 def msg(text, flags=0x40):
+    if QUIET:
+        print(text)
+        return 1
     if AUTO and not flags & 0x10 and not text.startswith("Плагины обновлены"):
         print(text)
         return 1
@@ -112,8 +116,10 @@ def main():
     ap.add_argument("--root", default=os.path.dirname(HERE))
     ap.add_argument("--auto", action="store_true")
     ap.add_argument("--force", action="store_true", help="обновить, даже если версия та же")
+    ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args()
-    AUTO = a.auto
+    global QUIET
+    AUTO, QUIET = a.auto, a.quiet
     root = os.path.abspath(a.root)
     cleanup_old(root)
 
