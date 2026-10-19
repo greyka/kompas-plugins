@@ -1,0 +1,182 @@
+# -*- coding: utf-8 -*-
+"""Плагин «Общий PDF стенок»: каждая стенка (.a3d) — отдельные чертежи .cdw,
+а PDF — один общий файл на всю папку.
+
+Использование:
+    python walls2pdf.py <папка со сборками> [--sides left,right] [--out <папка>]
+
+Результат в <папка>\\Чертежи\\:
+    Вид слева\\<стенка>.cdw, Вид справа\\<стенка>.cdw   — чертежи каждой стенки отдельно
+    <имя папки> — все стенки.pdf                       — один PDF: стенка за стенкой
+                                                         (вид слева, вид справа), с закладками
+Построение листа берётся из соседнего плагина «Чертежи рам» (frame2cdw.py).
+"""
+import argparse
+import os
+import shutil
+import sys
+import tempfile
+import time
+import traceback
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "lib"))                       # pypdf
+sys.path.insert(0, os.path.join(os.path.dirname(HERE), "Чертежи рам"))  # frame2cdw
+
+import frame2cdw as fd  # noqa: E402
+from pypdf import PdfReader, PdfWriter  # noqa: E402
+
+TITLE = "Общий PDF стенок"
+
+
+def msgbox(text, error=False):
+    import ctypes
+    ctypes.windll.user32.MessageBoxW(None, text, TITLE, 0x10 if error else 0x40)
+
+
+def list_assemblies(src):
+    if os.path.isfile(src):
+        return [src]
+    return [os.path.join(src, f) for f in sorted(os.listdir(src), key=str.lower)
+            if f.lower().endswith(".a3d")]
+
+
+def build_all(api7, files, out, sides):
+    """Чертежи каждой стенки (.cdw) + временные PDF; возвращает [(стенка, вид, pdf)], ошибки."""
+    tmp = tempfile.mkdtemp(prefix="walls2pdf-")
+    pages, errors = [], []
+    for n, f in enumerate(files, 1):
+        base = os.path.splitext(os.path.basename(f))[0]
+        print(f"[{n}/{len(files)}] {base}")
+        try:
+            info, bodies = fd.read_frame(api7, f)
+        except Exception as e:
+            errors.append(f"{base}: {e}")
+            traceback.print_exc()
+            continue
+        for side in sides:
+            title = fd.SIDES[side][0]
+            sub = os.path.join(out, title)
+            os.makedirs(sub, exist_ok=True)
+            cdw = os.path.join(sub, base + ".cdw")
+            try:
+                doc2d, _ = fd.build_drawing(api7, f, info, bodies, cdw, side)
+                doc2d.Close(0)
+                bak = cdw + ".bak"
+                if os.path.exists(bak):
+                    os.remove(bak)
+                pdf = os.path.join(tmp, f"{n:03d}-{side}.pdf")
+                fd.export_pdf(api7, cdw, pdf)
+                pages.append((base, title, pdf))
+            except Exception as e:
+                errors.append(f"{base} [{title}]: {e}")
+                traceback.print_exc()
+    return pages, errors, tmp
+
+
+def merge_pdf(pages, target):
+    """Один PDF: страницы по порядку, закладки «стенка → вид»."""
+    w = PdfWriter()
+    parents = {}
+    for wall, view, pdf in pages:
+        start = len(w.pages)
+        for p in PdfReader(pdf).pages:
+            w.add_page(p)
+        if wall not in parents:
+            parents[wall] = w.add_outline_item(wall, start)
+        w.add_outline_item(view, start, parent=parents[wall])
+    with open(target, "wb") as fh:
+        w.write(fh)
+    return len(w.pages)
+
+
+def run(src, out=None, sides="left,right", rot=None, gui=False, open_pdf=False):
+    src = os.path.abspath(src)
+    files = list_assemblies(src)
+    if not files:
+        raise RuntimeError(f"Нет сборок .a3d: {src}")
+    folder = src if os.path.isdir(src) else os.path.dirname(src)
+    out = os.path.abspath(out or os.path.join(folder, "Чертежи"))
+    os.makedirs(out, exist_ok=True)
+    target = os.path.join(out, f"{os.path.basename(folder)} — все стенки.pdf")
+    side_list = [s.strip() for s in sides.split(",") if s.strip()]
+
+    api7, started = fd.connect_kompas(rot)
+    hide_prev = api7.HideMessage
+    api7.HideMessage = 1
+    tmp = None
+    try:
+        pages, errors, tmp = build_all(api7, files, out, side_list)
+    finally:
+        api7.HideMessage = hide_prev
+        if started:
+            api7.Quit()
+            del api7
+            for _ in range(30):
+                if not fd.kompas_running():
+                    break
+                time.sleep(1)
+    try:
+        n_pages = merge_pdf(pages, target) if pages else 0
+    finally:
+        if tmp:
+            shutil.rmtree(tmp, ignore_errors=True)
+
+    walls = len({p[0] for p in pages})
+    text = (f"Стенок: {walls} из {len(files)}, листов в PDF: {n_pages}\n"
+            f"PDF: {target}\nЧертежи .cdw: {out}")
+    if errors:
+        text += "\n\nОшибки:\n" + "\n".join(errors[:15])
+    print(text)
+    if gui:
+        msgbox(text, error=bool(errors))
+    if open_pdf and n_pages:
+        os.startfile(target)
+    return target
+
+
+def menu(a):
+    """1 — папка текущей сборки, 2 — выбрать папку, 3 — открыть папку «Чертежи»."""
+    api7, _ = fd.connect_kompas(a.rot)
+    doc = api7.ActiveDocument
+    path = fd.CastTo(doc, "IKompasDocument").PathName if doc is not None else ""
+    if a.menu == 1:
+        if not path:
+            msgbox("Откройте любую сохранённую сборку из папки со стенками и повторите команду.")
+            return
+        run(os.path.dirname(path), sides=a.sides, rot=a.rot, gui=True, open_pdf=True)
+    elif a.menu == 2:
+        folder = fd.pick_folder("Папка со стенками (.a3d). Результат — в подпапке «Чертежи».")
+        if folder:
+            run(folder, sides=a.sides, rot=a.rot, gui=True, open_pdf=True)
+    elif a.menu == 3:
+        if not path:
+            msgbox("Нет активного сохранённого документа.")
+            return
+        d = os.path.join(os.path.dirname(path), "Чертежи")
+        os.startfile(d if os.path.isdir(d) else os.path.dirname(path))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("src", nargs="?")
+    ap.add_argument("--out")
+    ap.add_argument("--sides", default="left,right")
+    ap.add_argument("--menu", type=int)
+    ap.add_argument("--rot")
+    a = ap.parse_args()
+    try:
+        if a.menu:
+            menu(a)
+        elif a.src:
+            run(a.src, a.out, a.sides)
+        else:
+            ap.error("укажите папку со сборками")
+    except Exception:
+        if a.menu:
+            msgbox(traceback.format_exc(), error=True)
+        raise
+
+
+if __name__ == "__main__":
+    main()

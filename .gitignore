@@ -1,0 +1,16 @@
+# офлайн-копия Python (33 МБ) — не в git, ставится из интернета
+Python/Офлайн/runtime/
+__pycache__/
+*.pyc
+# промежуточные файлы сборки .rtw
+*.obj
+*.res
+*.exp
+*.lib
+*.pdb
+*.ilk
+*.old
+*.old[0-9]*
+*.bak
+python.txt
+Чертежи/

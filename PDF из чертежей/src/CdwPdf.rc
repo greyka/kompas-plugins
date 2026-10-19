@@ -1,0 +1,17 @@
+#pragma code_page(65001)
+#include <windows.h>
+#define IDR_LIBID 2000
+
+LANGUAGE LANG_RUSSIAN, SUBLANG_DEFAULT
+
+IDR_LIBID MENU
+BEGIN
+    MENUITEM "Выбрать чертежи → один PDF...",         1
+    MENUITEM "Открытые чертежи → один PDF...",        2
+    MENUITEM "Все чертежи из папки → один PDF...",    3
+END
+
+STRINGTABLE
+BEGIN
+    IDR_LIBID "PDF из чертежей"
+END

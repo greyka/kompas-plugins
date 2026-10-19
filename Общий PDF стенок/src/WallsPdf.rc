@@ -1,0 +1,17 @@
+#pragma code_page(65001)
+#include <windows.h>
+#define IDR_LIBID 2000
+
+LANGUAGE LANG_RUSSIAN, SUBLANG_DEFAULT
+
+IDR_LIBID MENU
+BEGIN
+    MENUITEM "Общий PDF: стенки из папки текущей сборки",  1
+    MENUITEM "Общий PDF: выбрать папку со стенками...",    2
+    MENUITEM "Открыть папку «Чертежи»",                    3
+END
+
+STRINGTABLE
+BEGIN
+    IDR_LIBID "Общий PDF стенок"
+END
