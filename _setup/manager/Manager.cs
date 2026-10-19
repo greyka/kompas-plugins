@@ -404,9 +404,7 @@ namespace KompasPlugins
             btnCheck.Click += (s, e) => CheckUpdates(true);
             btnUpdate = new Button { Text = "Обновить сейчас", AutoSize = true, Enabled = false };
             btnUpdate.Click += (s, e) => DoUpdate();
-            var bGit = new LinkLabel { Text = "Открыть на GitHub", AutoSize = true, Padding = new Padding(10, 7, 0, 0) };
-            bGit.LinkClicked += (s, e) => Process.Start("https://github.com/" + RepoName());
-            bar.Controls.AddRange(new Control[] { btnCheck, btnUpdate, bGit });
+            bar.Controls.AddRange(new Control[] { btnCheck, btnUpdate });
 
             txtNotes = new TextBox { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, BackColor = SystemColors.Window };
             txtLog = new TextBox { Dock = DockStyle.Bottom, Height = 110, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical, Font = new Font("Consolas", 9f) };
@@ -419,12 +417,6 @@ namespace KompasPlugins
             tabUpdate.Controls.Add(txtLog);
         }
 
-        string RepoName()
-        {
-            var kv = ReadIni(Path.Combine(Root, "_setup", "update.ini"), "update");
-            string r;
-            return kv.TryGetValue("repo", out r) ? r : "greyka/kompas-plugins";
-        }
 
         void CheckUpdates(bool userClick)
         {
