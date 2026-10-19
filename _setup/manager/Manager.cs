@@ -23,12 +23,23 @@ namespace KompasPlugins
         [STAThread]
         static void Main(string[] args)
         {
-            string tab = null;
+            string tab = null, plugin = "", errorFile = null, title = null;
+            bool report = false;
             foreach (var a in args)
+            {
                 if (a.StartsWith("--tab=")) tab = a.Substring(6);
+                else if (a == "--report") report = true;
+                else if (a.StartsWith("--plugin=")) plugin = a.Substring(9);
+                else if (a.StartsWith("--error=")) errorFile = a.Substring(8);
+                else if (a.StartsWith("--title=")) title = a.Substring(8);
+            }
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new MainForm(tab));
+            var root = Path.GetDirectoryName(Application.ExecutablePath);
+            if (report)
+                Application.Run(new ReportForm(root, plugin, errorFile, title));
+            else
+                Application.Run(new MainForm(tab));
         }
     }
 
@@ -233,7 +244,10 @@ namespace KompasPlugins
                 var inst = Path.Combine(Root, "_setup", "install.py");
                 RunPython("\"" + inst + "\" --root \"" + Root + "\"", false, null);
             };
-            bar.Controls.AddRange(new Control[] { bOpen, bReg });
+            var bBug = new Button { Text = "Сообщить о проблеме…", AutoSize = true };
+            tips.SetToolTip(bBug, "Отправить разработчику журнал работы плагина и комментарий (Telegram)");
+            bBug.Click += (s, e) => new ReportForm(Root, "", null, null).ShowDialog(this);
+            bar.Controls.AddRange(new Control[] { bOpen, bReg, bBug });
             tabPlugins.Controls.Add(list);
             tabPlugins.Controls.Add(bar);
             tabPlugins.Controls.Add(head);
@@ -493,19 +507,25 @@ namespace KompasPlugins
             return kv;
         }
 
-        string PythonExe(bool console)
+        void RunPython(string args, bool capture, Action<string> done) { Py.Run(this, Root, args, capture, done); }
+    }
+
+    // ---------- запуск Python (общий для окон) ----------
+    static class Py
+    {
+        public static string Exe(string root, bool console)
         {
             var name = console ? "python.exe" : "pythonw.exe";
-            foreach (var dir in new[] { Path.Combine(Root, "Python"), @"C:\KompasPlugins\Python",
+            foreach (var dir in new[] { Path.Combine(root, "Python"), @"C:\KompasPlugins\Python",
                                         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "KompasPlugins", "Python") })
                 if (File.Exists(Path.Combine(dir, name))) return Path.Combine(dir, name);
             return name;
         }
 
         // capture=true — без окна, вывод отдаётся в done (в потоке окна)
-        void RunPython(string args, bool capture, Action<string> done)
+        public static void Run(Form owner, string Root, string args, bool capture, Action<string> done)
         {
-            var psi = new ProcessStartInfo(PythonExe(capture), args)
+            var psi = new ProcessStartInfo(Exe(Root, capture), args)
             {
                 UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = Root,
                 RedirectStandardOutput = capture, RedirectStandardError = capture
@@ -530,8 +550,122 @@ namespace KompasPlugins
                     }
                 }
                 catch (Exception ex) { output = "Не удалось запустить Python: " + ex.Message; }
-                if (done != null && !IsDisposed) BeginInvoke(done, output);
+                if (done != null && !owner.IsDisposed) owner.BeginInvoke(done, output);
             }) { IsBackground = true }.Start();
+        }
+    }
+
+    // ---------- окно «Произошла ошибка» / «Сообщить о проблеме» ----------
+    // Отправку делает _setup\report.py --send (Telegram-бот из update.ini [report]).
+    class ReportForm : Form
+    {
+        readonly string Root, Plugin, ErrorText;
+        TextBox txtComment;
+        Label lblStatus;
+        Button btnSend;
+
+        public ReportForm(string root, string plugin, string errorFile, string title)
+        {
+            Root = root;
+            Plugin = plugin ?? "";
+            ErrorText = errorFile != null && File.Exists(errorFile) ? File.ReadAllText(errorFile, Encoding.UTF8) : "";
+            var ver = File.Exists(Path.Combine(root, "VERSION")) ? File.ReadAllText(Path.Combine(root, "VERSION")).Trim() : "?";
+            Text = (string.IsNullOrEmpty(title) ? "Плагины КОМПАС — версия " + ver : title);
+            Font = new Font("Segoe UI", 9.5f);
+            AutoScaleMode = AutoScaleMode.Font;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterScreen;
+            TopMost = true;
+            ClientSize = new Size(640, ErrorText.Length > 0 ? 470 : 280);
+            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+
+            var y = 12;
+            var head = new Label
+            {
+                Left = 12, Top = y, Width = 616, Height = 24, Font = new Font(Font, FontStyle.Bold),
+                Text = ErrorText.Length > 0 ? "Произошла ошибка" + (Plugin.Length > 0 ? " в плагине «" + Plugin + "»" : "") + "."
+                                            : "Отправить журнал работы разработчику."
+            };
+            Controls.Add(head);
+            y += 28;
+            if (ErrorText.Length > 0)
+            {
+                var err = new TextBox
+                {
+                    Left = 12, Top = y, Width = 616, Height = 180, Multiline = true, ReadOnly = true,
+                    ScrollBars = ScrollBars.Both, WordWrap = false, Font = new Font("Consolas", 8.5f),
+                    Text = ErrorText.Replace("\r\n", "\n").Replace("\n", "\r\n")
+                };
+                Controls.Add(err);
+                y += 188;
+            }
+            Controls.Add(new Label { Left = 12, Top = y, AutoSize = true, Text = "Что делали перед этим (необязательно):" });
+            y += 22;
+            txtComment = new TextBox { Left = 12, Top = y, Width = 616, Height = 70, Multiline = true, ScrollBars = ScrollBars.Vertical };
+            Controls.Add(txtComment);
+            y += 78;
+            lblStatus = new Label { Left = 12, Top = y, Width = 616, Height = 40, ForeColor = Color.DimGray,
+                                    Text = "Уйдёт: описание ошибки, версия, компьютер и журнал работы плагина." };
+            Controls.Add(lblStatus);
+            y += 44;
+
+            btnSend = new Button { Text = "Отправить разработчику", AutoSize = true, Top = y };
+            var bLog = new Button { Text = "Открыть журнал", AutoSize = true, Top = y };
+            var bClose = new Button { Text = "Закрыть", AutoSize = true, Top = y, DialogResult = DialogResult.Cancel };
+            Controls.AddRange(new Control[] { btnSend, bLog, bClose });
+            bClose.Left = 628 - bClose.PreferredSize.Width;
+            bLog.Left = bClose.Left - 8 - bLog.PreferredSize.Width;
+            btnSend.Left = bLog.Left - 8 - btnSend.PreferredSize.Width;
+            CancelButton = bClose;
+            ClientSize = new Size(640, y + btnSend.PreferredSize.Height + 12);
+
+            btnSend.Click += (s, e) => Send();
+            bLog.Click += (s, e) => OpenLog();
+            Shown += (s, e) => { TopMost = false; Activate(); txtComment.Focus(); };
+        }
+
+        string Script() { return Path.Combine(Root, "_setup", "report.py"); }
+
+        string PluginArg() { return Plugin.Length > 0 ? " --plugin \"" + Plugin + "\"" : ""; }
+
+        void OpenLog()
+        {
+            Py.Run(this, Root, "\"" + Script() + "\" --log-path" + PluginArg(), true, output =>
+            {
+                var path = output.Trim().Split('\n').Last().Trim();
+                if (File.Exists(path)) Process.Start("notepad.exe", "\"" + path + "\"");
+                else lblStatus.Text = "Журнала пока нет: " + path;
+            });
+        }
+
+        void Send()
+        {
+            btnSend.Enabled = false;
+            lblStatus.Text = "Отправляю…";
+            var tmp = Path.GetTempPath();
+            var args = "\"" + Script() + "\" --send" + PluginArg();
+            if (ErrorText.Length > 0)
+            {
+                var ef = Path.Combine(tmp, "kp_report_error.txt");
+                File.WriteAllText(ef, ErrorText, new UTF8Encoding(false));
+                args += " --error-file \"" + ef + "\"";
+            }
+            if (txtComment.Text.Trim().Length > 0)
+            {
+                var cf = Path.Combine(tmp, "kp_report_comment.txt");
+                File.WriteAllText(cf, txtComment.Text, new UTF8Encoding(false));
+                args += " --comment-file \"" + cf + "\"";
+            }
+            if (Text.Length > 0 && ErrorText.Length > 0) args += " --title \"ОШИБКА: " + Text.Replace("\"", "'") + "\"";
+            Py.Run(this, Root, args, true, output =>
+            {
+                var last = output.Trim().Split('\n').Last().Trim();
+                bool ok = last.StartsWith("Отчёт отправлен");
+                lblStatus.ForeColor = ok ? Color.DarkGreen : Color.DarkRed;
+                lblStatus.Text = ok ? last + " Спасибо!" : (last.Length > 0 ? last : "Не отправилось.") + " Можно переслать файл журнала вручную.";
+                btnSend.Enabled = !ok;
+            });
         }
     }
 }

@@ -418,6 +418,7 @@ def main():
     ap.add_argument("--menu", type=int)
     ap.add_argument("--rot")
     a = ap.parse_args()
+    fd.kpreport.start_log("Проверка чертежа")
     try:
         if a.menu:
             menu(a)
@@ -427,7 +428,7 @@ def main():
             ap.error("укажите чертёж или папку")
     except Exception:
         if a.menu:
-            msgbox(traceback.format_exc(), error=True)
+            fd.kpreport.error_dialog(TITLE, traceback.format_exc())
         raise
 
 

@@ -22,6 +22,7 @@ from win32com.client import CastTo, gencache
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "_setup"))
 import kpsettings  # noqa: E402  настройки (settings.ini) и версия плагинов
+import report as kpreport  # noqa: E402  журнал и отчёт об ошибке в Telegram
 
 CFG = kpsettings.load()
 TITLE = f"Чертежи рам — версия {kpsettings.version()}"
@@ -506,6 +507,7 @@ def main():
     ap.add_argument("--menu", type=int, help="команда из меню библиотеки КОМПАС (1..3)")
     ap.add_argument("--rot", help="имя КОМПАС в ROT (передаёт плагин)")
     a = ap.parse_args()
+    kpreport.start_log("Чертежи рам")
     a.sides = a.sides or CFG.sides("frame")
     a.no_pdf = a.no_pdf or not CFG.get("frame", "pdf")
     if a.menu:
@@ -517,7 +519,7 @@ def main():
             run(a)
     except Exception:
         if a.gui:
-            msgbox(traceback.format_exc(), error=True)
+            kpreport.error_dialog(TITLE, traceback.format_exc())
         raise
 
 
@@ -529,6 +531,7 @@ def menu(a):
     doc = api7.ActiveDocument
     doc = CastTo(doc, "IKompasDocument") if doc is not None else None
     path = doc.PathName if doc is not None else ""
+    kpreport.set_document(path)
 
     if a.menu == 9:
         kpsettings.open_manager("frame")
@@ -649,7 +652,10 @@ def run(a):
             msg += f"\nПропущено готовых: {a.skipped} (перезапись выключена в настройках)"
         if errors:
             msg += "\n\nОшибки:\n" + "\n".join(errors[:15])
-        msgbox(msg, error=bool(fail))
+        if fail:
+            kpreport.error_dialog(TITLE, msg)   # окно с кнопкой «Отправить разработчику»
+        else:
+            msgbox(msg)
 
 
 def process(api7, a, files, out):

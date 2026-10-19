@@ -133,7 +133,10 @@ def run(src, out=None, sides=None, rot=None, gui=False, open_pdf=False):
         text += "\n\nОшибки:\n" + "\n".join(errors[:15])
     print(text)
     if gui:
-        msgbox(text, error=bool(errors))
+        if errors:
+            fd.kpreport.error_dialog(TITLE, text)
+        else:
+            msgbox(text)
     if open_pdf and n_pages:
         os.startfile(target)
     return target
@@ -172,6 +175,7 @@ def main():
     ap.add_argument("--menu", type=int)
     ap.add_argument("--rot")
     a = ap.parse_args()
+    fd.kpreport.start_log("Общий PDF стенок")
     try:
         if a.menu:
             menu(a)
@@ -181,7 +185,7 @@ def main():
             ap.error("укажите папку со сборками")
     except Exception:
         if a.menu:
-            msgbox(traceback.format_exc(), error=True)
+            fd.kpreport.error_dialog(TITLE, traceback.format_exc())
         raise
 
 

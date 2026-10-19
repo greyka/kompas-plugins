@@ -144,7 +144,7 @@ def run(files, target, rot=None, gui=False, open_pdf=False):
         text += "\n\nНе вошли:\n" + "\n".join(errors[:15])
     print(text)
     if gui and (errors or not done):
-        msgbox(text, error=True)
+        fd.kpreport.error_dialog(TITLE, text)
     if open_pdf and done and CFG.get("pdf", "open_pdf"):
         os.startfile(target)
     elif gui and done and not errors:
@@ -221,6 +221,7 @@ def main():
     ap.add_argument("--menu", type=int)
     ap.add_argument("--rot")
     a = ap.parse_args()
+    fd.kpreport.start_log("PDF из чертежей")
     try:
         if a.menu:
             menu(a)
@@ -234,7 +235,7 @@ def main():
             ap.error("укажите чертежи или папку")
     except Exception:
         if a.menu:
-            msgbox(traceback.format_exc(), error=True)
+            fd.kpreport.error_dialog(TITLE, traceback.format_exc())
         raise
 
 
