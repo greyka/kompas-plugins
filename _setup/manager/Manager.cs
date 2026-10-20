@@ -442,7 +442,11 @@ namespace KompasPlugins
                     if (d.ContainsKey("error"))
                     {
                         lblLatest.Text = "нет связи с GitHub";
-                        txtNotes.Text = (string)d["error"];
+                        lblLatest.ForeColor = Color.DarkRed;
+                        txtNotes.Text = ("Не удалось узнать новую версию. Проверьте интернет и нажмите «Проверить».\n" +
+                                         "Если не помогает — вкладка «Плагины» → «Сообщить о проблеме…» " +
+                                         "(уйдёт журнал «Обновление» с подробностями).\n\nОшибка:\n" + (string)d["error"])
+                                        .Replace("\r\n", "\n").Replace("\n", "\r\n");
                         return;
                     }
                     bool avail = (bool)d["update_available"];

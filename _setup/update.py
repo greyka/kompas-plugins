@@ -27,6 +27,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 import traceback
 import urllib.error
 import urllib.request
@@ -74,7 +75,61 @@ def installed(root):
     return vid, ver
 
 
+LOG_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "KompasPlugins", "logs")
+
+
+def log(text):
+    """Журнал обновлений — его можно отправить кнопкой «Сообщить о проблеме…» в менеджере."""
+    try:
+        os.makedirs(LOG_DIR, exist_ok=True)
+        with open(os.path.join(LOG_DIR, "Обновление.log"), "a", encoding="utf-8") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}  {text}\n")
+    except OSError:
+        pass
+
+
 def latest(repo, branch, channel):
+    """Последняя версия: через API GitHub, а если он недоступен (лимит запросов, блокировка
+    api.github.com у провайдера) — через обычные страницы github.com / raw.githubusercontent.com."""
+    try:
+        return latest_api(repo, branch, channel)
+    except Exception as e_api:
+        log(f"api.github.com: {type(e_api).__name__}: {e_api} — пробую через github.com")
+        try:
+            return latest_web(repo, branch, channel)
+        except Exception as e_web:
+            log(f"github.com: {type(e_web).__name__}: {e_web}")
+            raise RuntimeError(f"api.github.com: {e_api}\ngithub.com: {e_web}") from None
+
+
+def changelog_section(text, ver):
+    import re
+    m = re.search(rf"^## {re.escape(ver)}\b.*?$\n(.*?)(?=^## |\Z)", text, re.S | re.M)
+    return m.group(1).strip() if m else ""
+
+
+def latest_web(repo, branch, channel):
+    if channel == "releases":
+        req = urllib.request.Request(f"https://github.com/{repo}/releases/latest",
+                                     headers={"User-Agent": "kompas-plugins-updater"})
+        with urllib.request.urlopen(req, timeout=30) as r:
+            final = r.geturl()                         # …/releases/tag/v1.3.0
+        if "/releases/tag/" in final:
+            tag = final.rsplit("/", 1)[-1]
+            ver = tag.lstrip("vV")
+            try:
+                notes = changelog_section(
+                    get(f"https://raw.githubusercontent.com/{repo}/{tag}/CHANGELOG.md").decode("utf-8"), ver)
+            except Exception:
+                notes = ""
+            return dict(id=tag, version=ver, title=f"Версия {ver}", notes=notes, channel="releases",
+                        zip=f"https://codeload.github.com/{repo}/zip/refs/tags/{tag}")
+    ver = get(f"https://raw.githubusercontent.com/{repo}/{branch}/VERSION").decode("utf-8").strip()
+    return dict(id=f"{branch}@{ver}", version=f"{ver} ({branch})", title=f"Ветка {branch}, версия {ver}",
+                notes="", channel="main", zip=f"https://codeload.github.com/{repo}/zip/refs/heads/{branch}")
+
+
+def latest_api(repo, branch, channel):
     """→ dict(id, version, title, notes, zip, channel). Нет релизов — берём ветку."""
     if channel == "releases":
         try:
@@ -252,5 +307,6 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
+        log("ошибка:\n" + traceback.format_exc())
         msg("Ошибка обновления:\n\n" + traceback.format_exc(), 0x10)
         raise
