@@ -46,6 +46,7 @@ class Sheet:
         self.tables = []      # dict(box, rows)
         self.fmt = None       # (ширина, высота)
         self.sources = set()  # файлы моделей ассоциативных видов
+        self.gab = None       # функция: объект → габарит в мм листа (для исправителя drawfix)
 
 
 def open_api5(api7, doc2d):
@@ -53,6 +54,20 @@ def open_api5(api7, doc2d):
     api5 = K5.KompasObject(Dispatch("Kompas.Application.5")._oleobj_)
     d5 = K5.ksDocument2D(api5.TransferInterface(doc2d._oleobj_, 1, 0))
     return K5, api5, d5
+
+
+def leader_box(gab, ld, text, view):
+    """Область текста выноски (над полкой), мм листа; None — нет габарита."""
+    k, vx, vy = view
+    g = gab(CastTo(ld, "IBaseLeader"))
+    if not g:
+        return None
+    br = CastTo(ld, "IBranchs")
+    x0, y0 = vx + br.X0 * k, vy + br.Y0 * k
+    # полка идёт от X0 в сторону дальнего края габарита
+    if g[2] - x0 > x0 - g[0]:
+        return (x0, y0, min(g[2], x0 + 4 + 3 * len(text)), y0 + 6)
+    return (max(g[0], x0 - 4 - 3 * len(text)), y0, x0, y0 + 6)
 
 
 def read_sheet(api7, doc2d):
@@ -67,6 +82,7 @@ def read_sheet(api7, doc2d):
         return box if box[2] - box[0] > 0.01 or box[3] - box[1] > 0.01 else None
 
     sh = Sheet()
+    sh.gab = gab
     try:
         sf = CastTo(CastTo(doc2d.LayoutSheets.Item(0), "ILayoutSheet").Format, "ISheetFormat")
         w, h = FORMATS_MM.get(sf.Format, (sf.FormatWidth, sf.FormatHeight))
@@ -90,7 +106,7 @@ def read_sheet(api7, doc2d):
             s = CastTo(t, "IText").Str
             box = gab(t)
             if box and s.strip() and not s.startswith("^("):   # ^( — служебная ссылка (обозначение вида)
-                sh.labels.append(dict(kind="надпись", text=s.strip(), box=box))
+                sh.labels.append(dict(kind="надпись", text=s.strip(), box=box, obj=t, view=(k, vx, vy)))
         sc = CastTo(v, "ISymbols2DContainer")
         for j in range(sc.Leaders.Count):
             ld = sc.Leaders.Leader(j)
@@ -99,17 +115,10 @@ def read_sheet(api7, doc2d):
                 kind = "позиция"
             except Exception:
                 s, kind = "", "выноска"
-            g = gab(CastTo(ld, "IBaseLeader"))
-            if not g:
+            box = leader_box(gab, ld, s, (k, vx, vy))
+            if not box:
                 continue
-            br = CastTo(ld, "IBranchs")
-            x0, y0 = vx + br.X0 * k, vy + br.Y0 * k
-            # текст над полкой: полка идёт от X0 в сторону дальнего края габарита
-            if g[2] - x0 > x0 - g[0]:
-                box = (x0, y0, min(g[2], x0 + 4 + 3 * len(s)), y0 + 6)
-            else:
-                box = (max(g[0], x0 - 4 - 3 * len(s)), y0, x0, y0 + 6)
-            sh.labels.append(dict(kind=kind, text=s.strip() or "?", box=box))
+            sh.labels.append(dict(kind=kind, text=s.strip() or "?", box=box, obj=ld, view=(k, vx, vy)))
         for j in range(sc.LineDimensions.Count):
             d = CastTo(sc.LineDimensions.LineDimension(j), "ILineDimension")
             try:
@@ -130,16 +139,18 @@ def read_sheet(api7, doc2d):
             elif d.Orientation == 2:    # вертикальный: текст слева от линии, повёрнут
                 cy = (y1 + y2) / 2
                 box = (x3 - 0.5 - th, cy - tw / 2, x3 - 0.5, cy + tw / 2)
-            else:                       # наклонный (диагональ) — пропускаем, положение сложно оценить
-                continue
-            sh.labels.append(dict(kind="размер", text=text, box=box))
+            else:                       # наклонный (диагональ): текст у середины, повёрнут — грубая оценка
+                cx, cy = (x1 + x2) / 2, (y1 + y2) / 2
+                hw = 0.38 * tw + 2
+                box = (cx - hw, cy - hw * 0.6, cx + hw, cy + hw)
+            sh.labels.append(dict(kind="размер", text=text, box=box, obj=d, view=(k, vx, vy)))
         for j in range(sc.DrawingTables.Count):
             tb = sc.DrawingTables.DrawingTable(j)
             g = gab(CastTo(tb, "IDrawingTable"))
             t = CastTo(tb, "ITable")
             rows = [[CastTo(CastTo(t.Cell(r, c), "ITableCell").Text, "IText").Str
                      for c in range(t.ColumnsCount)] for r in range(t.RowsCount)]
-            sh.tables.append(dict(box=g, rows=rows))
+            sh.tables.append(dict(box=g, rows=rows, obj=tb))
     return sh
 
 
@@ -410,6 +421,26 @@ def menu(a):
             msgbox("Справок рядом с текущим документом нет.")
             return
         os.startfile(max(cand, key=os.path.getmtime))
+    elif a.menu in (4, 5):                       # исправитель — отдельный скрипт drawfix.py
+        import drawfix
+        if a.menu == 4:
+            if not path.lower().endswith(".cdw"):
+                msgbox("Откройте сохранённый чертёж (.cdw) и повторите команду.")
+                return
+            doc2d = CastTo(doc, "IKompasDocument2D")
+            done, rec = drawfix.fix_document(api7, doc2d)
+            if done:
+                CastTo(doc, "IKompasDocument").Save()
+                pdf = os.path.splitext(path)[0] + ".pdf"
+                if os.path.isfile(pdf):
+                    fd.export_pdf(api7, path, pdf)        # PDF — из исправленного чертежа
+            text = (f"Исправлено: {len(done)}" + ("\n" + "\n".join("• " + d for d in done[:20]) if done else "")
+                    + ("\n\nОсталось посмотреть вручную: " + drawfix.remarks_text(rec) if rec else "\n\nЗамечаний не осталось."))
+            msgbox(text)
+        else:
+            folder = fd.pick_folder("Папка с чертежами (.cdw, включая подпапки) — исправить все")
+            if folder:
+                drawfix.run(folder, rot=a.rot, gui=True)
 
 
 def main():

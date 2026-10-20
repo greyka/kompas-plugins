@@ -67,8 +67,11 @@ def build_all(api7, files, out, sides):
             os.makedirs(sub, exist_ok=True)
             cdw = os.path.join(sub, base + ".cdw")
             try:
-                doc2d, _ = fd.build_drawing(api7, f, info, bodies, cdw, side)
+                doc2d, stat = fd.build_drawing(api7, f, info, bodies, cdw, side)   # уже проверен/исправлен
                 doc2d.Close(0)
+                if stat.get("remarks"):
+                    rep = fd.write_remarks(cdw, stat["remarks"])
+                    skips.append(fd.problem(cdw, "после автоисправления остались замечания — справка: " + rep, side))
                 bak = cdw + ".bak"
                 if os.path.exists(bak):
                     os.remove(bak)
@@ -139,7 +142,7 @@ def run(src, out=None, sides=None, rot=None, gui=False, open_pdf=False):
     text = (f"Стенок: {walls} из {len(files)}, листов в PDF: {n_pages}\n"
             f"PDF: {target}\nЧертежи .cdw: {out}")
     text += fd.problems_text("Ошибки — не вошли в PDF", errors)
-    text += fd.problems_text("Пропущено", skips)
+    text += fd.problems_text("Пропущено / замечания", skips)
     print(text)
     if gui:
         if errors:

@@ -113,7 +113,9 @@ def section_text(raw, name):
         sign, sec = (SECTION_SIGNS.get(m.group(1), ""), m.group(2)) if m else ("", raw)
     else:
         sign, sec = "", parse_section(name)[0] or ""
-    return sign + sec.replace("х", "x")
+    # «60,00x40,00x5,00» → «60x40x5» (у части профилей свойство «Сечение» записано с нулями)
+    sec = re.sub(r"(\d+)[.,]0+(?=\D|$)", r"\1", sec.replace("х", "x"))
+    return sign + sec
 
 
 def find_open_doc(api7, path):
@@ -232,6 +234,71 @@ def classify(bodies, u, v):
     return posts, rails, braces
 
 
+OPENING_MIN_W, OPENING_MIN_H = 400, 1200   # мм: меньше — обычная ячейка между ригелями, не проём
+
+
+def find_openings(bodies, u, v, lo, hi, cell=10.0):
+    """Проёмы (двери, окна): большие пустые прямоугольники внутри рамы.
+    Элементы раскладываются на сетку cell мм; ищем наибольший пустой прямоугольник, пока он не
+    меньше OPENING_MIN_W × OPENING_MIN_H. → [(u1, u2, v1, v2)] в координатах модели, слева направо."""
+    nx = max(1, int((hi[u] - lo[u]) / cell) + 1)
+    ny = max(1, int((hi[v] - lo[v]) / cell) + 1)
+    occ = [bytearray(nx) for _ in range(ny)]
+
+    def mark(x1, x2, y1, y2):
+        i1, i2 = max(0, int((x1 - lo[u]) / cell)), min(nx - 1, int((x2 - lo[u]) / cell))
+        j1, j2 = max(0, int((y1 - lo[v]) / cell)), min(ny - 1, int((y2 - lo[v]) / cell))
+        for j in range(j1, j2 + 1):
+            occ[j][i1:i2 + 1] = b"\x01" * (i2 - i1 + 1)
+
+    for b in bodies:
+        mark(b["box"][u], b["box"][u + 3], b["box"][v], b["box"][v + 3])
+    # край рамы тоже «занят»: проём должен быть внутри
+    mark(lo[u], lo[u], lo[v], hi[v]); mark(hi[u], hi[u], lo[v], hi[v])  # noqa: E702
+    mark(lo[u], hi[u], lo[v], lo[v]); mark(lo[u], hi[u], hi[v], hi[v])  # noqa: E702
+
+    found = []
+    while True:
+        best = None                       # (площадь, i1, i2, j1, j2) — наибольший пустой прямоугольник
+        heights = [0] * nx
+        for j in range(ny):
+            row = occ[j]
+            for i in range(nx):
+                heights[i] = 0 if row[i] else heights[i] + 1
+            stack = []
+            for i in range(nx + 1):
+                h = heights[i] if i < nx else 0
+                start = i
+                while stack and stack[-1][1] >= h:
+                    s, sh = stack.pop()
+                    a = sh * (i - s)
+                    if (sh * cell >= OPENING_MIN_H and (i - s) * cell >= OPENING_MIN_W
+                            and (best is None or a > best[0])):
+                        best = (a, s, i - 1, j - sh + 1, j)
+                    start = s
+                stack.append((start, h))
+        if best is None:
+            break
+        _, i1, i2, j1, j2 = best
+        for j in range(j1, j2 + 1):
+            occ[j][i1:i2 + 1] = b"\x01" * (i2 - i1 + 1)
+        found.append((lo[u] + i1 * cell, lo[u] + (i2 + 1) * cell, lo[v] + j1 * cell, lo[v] + (j2 + 1) * cell))
+    return sorted(snap_opening(o, bodies, u, v) for o in found)
+
+
+def snap_opening(o, bodies, u, v):
+    """Уточнить края проёма до граней ближайших элементов (сетка даёт точность ±cell)."""
+    u1, u2, v1, v2 = o
+    def near(vals, x, side):
+        c = [t for t in vals if abs(t - x) <= 15]
+        return (max(c) if side < 0 else min(c)) if c else x
+    rights = [b["box"][u + 3] for b in bodies]
+    lefts = [b["box"][u] for b in bodies]
+    tops = [b["box"][v + 3] for b in bodies]
+    bottoms = [b["box"][v] for b in bodies]
+    return (near(rights, u1, -1), near(lefts, u2, 1), near(tops, v1, -1), near(bottoms, v2, 1))
+
+
 # --- чертёж ------------------------------------------------------------------
 def pick_layout(W, H):
     """Наименьший лист (не меньше «Наименьший формат») и крупнейший масштаб,
@@ -290,7 +357,7 @@ def ordinate_marks(view, items, side, edge, scale, gap=2.0, tick=12.0, text_h=3.
     slot_prev = None
     for (xv, yv), val in items:
         c = xv if side == "bottom" else yv               # координата вдоль края
-        slot = c if slot_prev is None else max(c, slot_prev + (text_h + 3) * k)
+        slot = c if slot_prev is None else max(c, slot_prev + (text_h + 6) * k)
         slot_prev = slot
         e0, e1, e2 = edge, edge, edge
         sgn = -1 if side == "bottom" else 1
@@ -440,6 +507,16 @@ def _build_drawing(api7, a3d, info, bodies, out_cdw, side, created):
     ordinate_marks(view, [(proj(x, lo[v]), abs(x - left_u)) for x in xs], "bottom", bottom, scale)
     ordinate_marks(view, [(proj(right_u, y), y - lo[v]) for y in ys], "right", right, scale)
 
+    # проёмы (двери, окна): ширина — у низа проёма, высота — внутри проёма
+    if CFG.get("frame", "opening_dims"):
+        for (o1, o2, o3, o4) in find_openings(bodies, u, v, lo, hi):
+            yd = o3 + (o4 - o3) * 0.12
+            pa, pb = proj(o1, yd), proj(o2, yd)
+            add_line_dim(cont, pa, pb, (pa[0], pa[1]), ksLinDHorizontal)
+            xd = o1 + (o2 - o1) * 0.35
+            pa, pb = proj(xd, o3), proj(xd, o4)
+            add_line_dim(cont, pa, pb, (pa[0], pa[1]), ksLinDVertical)
+
     # габариты
     mark_len = 22 / scale
     if CFG.get("frame", "overall_dims"):
@@ -505,9 +582,50 @@ def _build_drawing(api7, a3d, info, bodies, out_cdw, side, created):
     except Exception:
         pass
 
+    # проверка + исправитель — до сохранения и PDF, чтобы PDF шёл уже из исправленного чертежа
+    fixed, remarks = auto_fix(api7, doc2d, bodies)
+
     CastTo(doc2d, "IKompasDocument").SaveAs(out_cdw)
     return doc2d, dict(W=W, H=H, scale=n, fmt=fmt, projection=best[0],
-                       posts=len(posts), rails=len(rails), braces=len(braces))
+                       posts=len(posts), rails=len(rails), braces=len(braces),
+                       fixed=len(fixed), remarks=remarks)
+
+
+def auto_fix(api7, doc2d, bodies):
+    """«Проверка чертежа» + исправитель drawfix (плагин «Проверка чертежа» рядом).
+    → (что исправлено, оставшиеся замечания [(заголовок, пункты, совет)])."""
+    if not CFG.get("check", "auto_fix"):
+        return [], []
+    folder = os.path.join(os.path.dirname(HERE), "Проверка чертежа")
+    if not os.path.isfile(os.path.join(folder, "drawfix.py")):
+        return [], []
+    if folder not in sys.path:
+        sys.path.insert(0, folder)
+    try:
+        import drawfix
+        done, rec = drawfix.fix_document(api7, doc2d, bodies)
+        for d in done:
+            print(f"  исправлено: {d}")
+        return done, rec
+    except Exception as e:
+        traceback.print_exc()
+        return [], [("Автопроверка не выполнилась", [f"• {e}"], "")]
+
+
+def write_remarks(cdw, rec):
+    """Справка с оставшимися замечаниями рядом с чертежом: «<имя> — проверка.txt»."""
+    path = os.path.splitext(cdw)[0] + " — проверка.txt"
+    lines = [f"ЗАМЕЧАНИЯ ПО ЧЕРТЕЖУ: {os.path.basename(cdw)}", f"Путь: {cdw}",
+             "Автоисправление уже выполнено — ниже то, что надо посмотреть вручную.", ""]
+    for n, (title, items, advice) in enumerate(rec, 1):
+        lines.append(f"{n}. {title} — {len(items)}")
+        lines += ["   " + s for s in items[:30]]
+        if advice:
+            lines.append(f"   Рекомендация: {advice}")
+        lines.append("")
+    with open(path, "w", encoding="utf-8-sig") as f:
+        f.write("\n".join(lines))
+    return path
 
 
 def pick_projection(views, a3d, lo, hi, u, v, thin, mirrored=False):
@@ -747,8 +865,10 @@ def run(a):
         for c in last_cdw:
             api7.Documents.Open(c, True, False)
     skips = getattr(a, "skips", [])
-    if a.gui and (fail or skips or len(files) > 1):  # одиночная сборка без проблем — без окна, чертежи откроются
+    remarks = getattr(a, "remarks", [])
+    if a.gui and (fail or skips or remarks or len(files) > 1):  # одиночная без проблем — без окна
         msg = f"Готово чертежей: {ok}, сборок: {len(files)}\nПапка: {out}"
+        msg += problems_text("Замечания — посмотрите вручную", remarks)
         msg += problems_text("Ошибки — чертёж не построен", errors)
         msg += problems_text("Пропущено", skips)
         print(msg)
@@ -763,7 +883,7 @@ def process(api7, a, files, out):
     sides = [x.strip() for x in a.sides.split(",") if x.strip()]
     ok = fail = 0
     errors, last_cdw = [], []
-    a.skips = []
+    a.skips, a.remarks = [], []
     for f in files:
         base = os.path.splitext(os.path.basename(f))[0]
         try:
@@ -803,7 +923,17 @@ def process(api7, a, files, out):
                 bak = cdw + ".bak"
                 if os.path.exists(bak):
                     os.remove(bak)
-                print(f"OK  {base} [{SIDES[side][0]}]: {stat}")
+                old_rep = os.path.splitext(cdw)[0] + " — проверка.txt"
+                if stat.get("remarks"):
+                    rep = write_remarks(cdw, stat["remarks"])
+                    a.remarks = getattr(a, "remarks", []) + [problem(
+                        cdw, "после автоисправления остались замечания: "
+                        + "; ".join(f"{t.lower()} — {len(i)}" for t, i, _ in stat["remarks"])
+                        + f" (справка: {rep})", side)]
+                elif os.path.exists(old_rep):
+                    os.remove(old_rep)                       # справка от прошлого построения устарела
+                print(f"OK  {base} [{SIDES[side][0]}]: исправлено {stat.get('fixed', 0)}, "
+                      f"замечаний {len(stat.get('remarks') or [])}; {stat}")
                 ok += 1
                 last_cdw.append(cdw)
             except Exception as e:
