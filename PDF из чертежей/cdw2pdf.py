@@ -118,6 +118,8 @@ def make_pdf(api7, files, target):
                 traceback.print_exc()
         if done:
             os.makedirs(os.path.dirname(os.path.abspath(target)), exist_ok=True)
+            # метка версии — по присланному PDF видно, какой версией плагинов он сделан
+            w.add_metadata({"/Creator": f"Плагины КОМПАС {fd.kpsettings.version()}", "/Producer": "pypdf"})
             with open(target, "wb") as fh:
                 w.write(fh)
     finally:

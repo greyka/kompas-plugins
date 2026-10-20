@@ -98,6 +98,8 @@ def merge_pdf(pages, target):
         if wall not in parents:
             parents[wall] = w.add_outline_item(wall, start)
         w.add_outline_item(view, start, parent=parents[wall])
+    # метка версии — по присланному PDF видно, какой версией плагинов он сделан
+    w.add_metadata({"/Creator": f"Плагины КОМПАС {fd.kpsettings.version()}", "/Producer": "pypdf"})
     with open(target, "wb") as fh:
         w.write(fh)
     return len(w.pages)
