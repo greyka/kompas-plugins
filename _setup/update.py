@@ -33,6 +33,9 @@ import urllib.error
 import urllib.request
 import zipfile
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import net  # noqa: E402  HTTPS с запасными путями
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 TITLE = "Обновление плагинов КОМПАС"
 ROOT_FILES = ("VERSION", "CHANGELOG.md", "ПРОЧТИ.txt", "Обновить.bat", "Менеджер плагинов КОМПАС.exe")
@@ -47,9 +50,7 @@ def msg(text, flags=0x40):
 
 
 def get(url, timeout=30):
-    req = urllib.request.Request(url, headers={"User-Agent": "kompas-plugins-updater"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+    return net.get(url, timeout)     # сертификаты Windows + certifi, при ошибке SSL — curl.exe
 
 
 def repo_config():
@@ -110,10 +111,7 @@ def changelog_section(text, ver):
 
 def latest_web(repo, branch, channel):
     if channel == "releases":
-        req = urllib.request.Request(f"https://github.com/{repo}/releases/latest",
-                                     headers={"User-Agent": "kompas-plugins-updater"})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            final = r.geturl()                         # …/releases/tag/v1.3.0
+        final = net.final_url(f"https://github.com/{repo}/releases/latest")   # …/releases/tag/v1.3.0
         if "/releases/tag/" in final:
             tag = final.rsplit("/", 1)[-1]
             ver = tag.lstrip("vV")

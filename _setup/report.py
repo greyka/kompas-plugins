@@ -28,6 +28,9 @@ import traceback
 import urllib.request
 import uuid
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))   # переносной Python не добавляет папку скрипта
+import net  # noqa: E402  сертификаты Windows + certifi, запасной curl.exe
+
 SETUP = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(SETUP)
 LOG_DIR = os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "KompasPlugins", "logs")
@@ -154,7 +157,7 @@ def _api(token, method, fields, file=None, timeout=30, field="document"):
         body.write(blob)
         body.write(f"\r\n--{b}--\r\n".encode("utf-8"))
         req = urllib.request.Request(url, body.getvalue(), {"Content-Type": f"multipart/form-data; boundary={b}"})
-    res = json.loads(urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8"))
+    res = json.loads(urllib.request.urlopen(req, timeout=timeout, context=net.context()).read().decode("utf-8"))
     if not res.get("ok"):
         raise RuntimeError(res.get("description") or "Telegram: ошибка")
     return res
@@ -210,7 +213,7 @@ INDEX_NAME = "reports_index.jsonl"
 
 def _download(token, file_id):
     path = _api(token, "getFile", {"file_id": file_id})["result"]["file_path"]
-    return urllib.request.urlopen(f"https://api.telegram.org/file/bot{token}/{path}", timeout=60).read()
+    return net.get(f"https://api.telegram.org/file/bot{token}/{path}", 60)
 
 
 def _pinned_index(token, chat):
