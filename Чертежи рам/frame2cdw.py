@@ -46,6 +46,36 @@ def side_folder(side):
     return CFG.get("general", "left_folder" if side == "left" else "right_folder") or SIDES[side][0]
 
 
+def problem(path, reason, side=None):
+    """Строка для итогового окна и журнала: имя файла, полный путь, причина."""
+    if isinstance(reason, Exception):
+        text = str(reason).strip() or type(reason).__name__
+        if not isinstance(reason, (KompasBusy, NotAFrame, RuntimeError)):
+            text = f"{type(reason).__name__}: {text}"
+    else:
+        text = reason
+    view = f" [{SIDES[side][0]}]" if side else ""
+    return f"• {os.path.basename(path)}{view}\n   Путь: {path}\n   Причина: {text}"
+
+
+def problems_text(title, items, limit=12):
+    if not items:
+        return ""
+    more = f"\n…и ещё {len(items) - limit} (полностью — в журнале)" if len(items) > limit else ""
+    return f"\n\n{title} ({len(items)}):\n" + "\n".join(items[:limit]) + more
+
+
+def choose_sides(section, title):
+    """Какие виды строить: окно выбора (если в настройках «Спрашивать при каждом построении»),
+    иначе — из настроек. → 'left' | 'right' | 'left,right' или None (нажата «Отмена»)."""
+    import subprocess
+    if not CFG.get(section, "ask_sides") or not os.path.isfile(kpsettings.MANAGER_EXE):
+        return CFG.sides(section)
+    r = subprocess.run([kpsettings.MANAGER_EXE, "--ask-sides", f"--section={section}", f"--title={title}"],
+                       cwd=kpsettings.ROOT).returncode
+    return {1: "left", 2: "right", 3: "left,right"}.get(r)
+
+
 def out_folder_name():
     return CFG.get("general", "out_folder") or "Чертежи"
 PROJECTIONS = ["#Сверху", "#Снизу", "#Спереди", "#Сзади", "#Слева", "#Справа"]
@@ -106,9 +136,9 @@ class NotAFrame(RuntimeError):
 RETRY_WAITS = (2, 5, 10)   # секунды между повторами, если КОМПАС не ответил
 
 
-def need(obj, what):
+def need(obj, what, hint="КОМПАС был занят или показал своё окно"):
     if obj is None:
-        raise KompasBusy(f"КОМПАС не выполнил «{what}» (был занят или показал своё окно)")
+        raise KompasBusy(f"КОМПАС не выполнил «{what}» ({hint})")
     return obj
 
 
@@ -121,7 +151,7 @@ def with_retry(fn, *args, **kw):
             return fn(*args, **kw)
         except KompasBusy as e:
             if wait is None:
-                raise
+                raise KompasBusy(f"{e}; повтор {len(RETRY_WAITS)} раза не помог") from None
             print(f"  {e} — повтор через {wait} с")
             time.sleep(wait)
 
@@ -133,7 +163,9 @@ def read_frame(api7, path):
 def _read_frame(api7, path):
     """Читает уже открытый в КОМПАС документ (и не закрывает его) или открывает файл скрыто."""
     opened = find_open_doc(api7, path)
-    doc = opened or need(api7.Documents.Open(path, False, True), "открыть сборку")
+    doc = opened or need(api7.Documents.Open(path, False, True), "открыть сборку",
+                         "файл повреждён, сохранён в более новой версии КОМПАС, открыт у другого "
+                         "пользователя — или КОМПАС был занят")
     try:
         top = CastTo(doc, "IKompasDocument3D").TopPart
         P = prop_values(api7, doc)
@@ -562,6 +594,7 @@ def main():
     ap.add_argument("--rot", help="имя КОМПАС в ROT (передаёт плагин)")
     a = ap.parse_args()
     kpreport.start_log("Чертежи рам")
+    a.sides_explicit = a.sides is not None     # задано в командной строке — не спрашиваем
     a.sides = a.sides or CFG.sides("frame")
     a.no_pdf = a.no_pdf or not CFG.get("frame", "pdf")
     if a.menu:
@@ -575,6 +608,17 @@ def main():
         if a.gui:
             kpreport.error_dialog(TITLE, traceback.format_exc())
         raise
+
+
+def ask_sides(a):
+    """Окно «Какие виды строить?» перед построением. False — нажата «Отмена»."""
+    if a.sides_explicit:
+        return True
+    s = choose_sides("frame", TITLE)
+    if not s:
+        return False
+    a.sides = s
+    return True
 
 
 def menu(a):
@@ -602,11 +646,13 @@ def menu(a):
                 return
             if r == 6:      # Да
                 doc.Save()
+        if not ask_sides(a):
+            return
         a.src, a.open = path, CFG.get("frame", "open_after")
         run(a)
     elif a.menu == 2:
         folder = pick_folder(f"Папка со сборками рам (.a3d). Чертежи появятся в подпапке «{out_folder_name()}».")
-        if not folder:
+        if not folder or not ask_sides(a):
             return
         a.src = folder
         run(a)
@@ -700,14 +746,12 @@ def run(a):
     if a.open and last_cdw:
         for c in last_cdw:
             api7.Documents.Open(c, True, False)
-    if a.gui and (fail or len(files) > 1):  # одиночная сборка — без окна, чертежи откроются
+    skips = getattr(a, "skips", [])
+    if a.gui and (fail or skips or len(files) > 1):  # одиночная сборка без проблем — без окна, чертежи откроются
         msg = f"Готово чертежей: {ok}, сборок: {len(files)}\nПапка: {out}"
-        if getattr(a, "skipped", 0):
-            msg += f"\nПропущено готовых: {a.skipped} (перезапись выключена в настройках)"
-        if getattr(a, "not_frames", None):
-            msg += "\nПропущены — не рамы (нет профилей): " + ", ".join(a.not_frames)
-        if errors:
-            msg += "\n\nОшибки:\n" + "\n".join(errors[:15])
+        msg += problems_text("Ошибки — чертёж не построен", errors)
+        msg += problems_text("Пропущено", skips)
+        print(msg)
         if fail:
             kpreport.error_dialog(TITLE, msg)   # окно с кнопкой «Отправить разработчику»
         else:
@@ -719,18 +763,19 @@ def process(api7, a, files, out):
     sides = [x.strip() for x in a.sides.split(",") if x.strip()]
     ok = fail = 0
     errors, last_cdw = [], []
+    a.skips = []
     for f in files:
         base = os.path.splitext(os.path.basename(f))[0]
         try:
             info, bodies = read_frame(api7, f)
-        except NotAFrame:
-            a.not_frames = getattr(a, "not_frames", []) + [base]
-            print(f"--  {base}: нет профилей металлоконструкций — не рама, пропуск")
+        except NotAFrame as e:
+            a.skips.append(problem(f, e))
+            print(f"--  {base}: {e}\n    {f}")
             continue
         except Exception as e:
             fail += 1
-            errors.append(f"{base}: {e}")
-            print(f"ERR {base}:")
+            errors.append(problem(f, e))
+            print(f"ERR {base}: {f}")
             traceback.print_exc()
             continue
         last_cdw = []
@@ -739,15 +784,19 @@ def process(api7, a, files, out):
             os.makedirs(sub, exist_ok=True)
             cdw = os.path.join(sub, base + ".cdw")
             if os.path.exists(cdw) and not CFG.get("general", "overwrite"):
-                a.skipped = getattr(a, "skipped", 0) + 1
+                a.skips.append(problem(f, f"чертёж уже есть ({cdw}), перезапись выключена в настройках", side))
                 print(f"--  {base} [{SIDES[side][0]}]: уже есть, пропуск")
                 continue
             try:
                 doc2d, stat = build_drawing(api7, f, info, bodies, cdw, side)
                 if not a.no_pdf:
+                    pdf = os.path.join(sub, base + ".pdf")
                     try:
-                        export_pdf(api7, cdw, os.path.join(sub, base + ".pdf"))
+                        export_pdf(api7, cdw, pdf)
+                        if not os.path.isfile(pdf):
+                            raise RuntimeError("КОМПАС не создал файл")
                     except Exception as e:
+                        a.skips.append(problem(f, f"PDF не создан ({pdf}): {e} — чертёж .cdw есть", side))
                         print(f"  pdf: {e}")
                 if not a.keep_open:
                     doc2d.Close(0)
@@ -759,8 +808,8 @@ def process(api7, a, files, out):
                 last_cdw.append(cdw)
             except Exception as e:
                 fail += 1
-                errors.append(f"{base} [{SIDES[side][0]}]: {e}")
-                print(f"ERR {base} [{SIDES[side][0]}]:")
+                errors.append(problem(f, e, side))
+                print(f"ERR {base} [{SIDES[side][0]}]: {f}")
                 traceback.print_exc()
     print(f"Готово: {ok} ок, {fail} ошибок")
     return ok, fail, errors, last_cdw

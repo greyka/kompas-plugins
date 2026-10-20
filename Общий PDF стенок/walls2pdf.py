@@ -43,19 +43,22 @@ def list_assemblies(src):
 
 
 def build_all(api7, files, out, sides):
-    """Чертежи каждой стенки (.cdw) + временные PDF; возвращает [(стенка, вид, pdf)], ошибки."""
+    """Чертежи каждой стенки (.cdw) + временные PDF → [(стенка, вид, pdf)], ошибки, пропуски, tmp.
+    Ошибки/пропуски — строки fd.problem(): имя файла, полный путь, причина."""
     tmp = tempfile.mkdtemp(prefix="walls2pdf-")
-    pages, errors = [], []
+    pages, errors, skips = [], [], []
     for n, f in enumerate(files, 1):
         base = os.path.splitext(os.path.basename(f))[0]
         print(f"[{n}/{len(files)}] {base}")
         try:
             info, bodies = fd.read_frame(api7, f)
-        except fd.NotAFrame:
-            print(f"--  {base}: не рама (нет профилей), пропуск")
+        except fd.NotAFrame as e:
+            skips.append(fd.problem(f, e))
+            print(f"--  {base}: {e}\n    {f}")
             continue
         except Exception as e:
-            errors.append(f"{base}: {e}")
+            errors.append(fd.problem(f, e))
+            print(f"ERR {base}: {f}")
             traceback.print_exc()
             continue
         for side in sides:
@@ -71,11 +74,14 @@ def build_all(api7, files, out, sides):
                     os.remove(bak)
                 pdf = os.path.join(tmp, f"{n:03d}-{side}.pdf")
                 fd.export_pdf(api7, cdw, pdf)
+                if not os.path.isfile(pdf):
+                    raise RuntimeError(f"КОМПАС не создал PDF из чертежа {cdw}")
                 pages.append((base, title, pdf))
             except Exception as e:
-                errors.append(f"{base} [{title}]: {e}")
+                errors.append(fd.problem(f, e, side))
+                print(f"ERR {base} [{title}]: {f}")
                 traceback.print_exc()
-    return pages, errors, tmp
+    return pages, errors, skips, tmp
 
 
 def merge_pdf(pages, target):
@@ -113,7 +119,7 @@ def run(src, out=None, sides=None, rot=None, gui=False, open_pdf=False):
     api7.HideMessage = 1
     tmp = None
     try:
-        pages, errors, tmp = build_all(api7, files, out, side_list)
+        pages, errors, skips, tmp = build_all(api7, files, out, side_list)
     finally:
         api7.HideMessage = hide_prev
         if started:
@@ -132,8 +138,8 @@ def run(src, out=None, sides=None, rot=None, gui=False, open_pdf=False):
     walls = len({p[0] for p in pages})
     text = (f"Стенок: {walls} из {len(files)}, листов в PDF: {n_pages}\n"
             f"PDF: {target}\nЧертежи .cdw: {out}")
-    if errors:
-        text += "\n\nОшибки:\n" + "\n".join(errors[:15])
+    text += fd.problems_text("Ошибки — не вошли в PDF", errors)
+    text += fd.problems_text("Пропущено", skips)
     print(text)
     if gui:
         if errors:
@@ -157,11 +163,14 @@ def menu(a):
         if not path:
             msgbox("Откройте любую сохранённую сборку из папки со стенками и повторите команду.")
             return
-        run(os.path.dirname(path), sides=a.sides, rot=a.rot, gui=True, open_pdf=True)
+        sides = a.sides or fd.choose_sides("walls", TITLE)
+        if sides:
+            run(os.path.dirname(path), sides=sides, rot=a.rot, gui=True, open_pdf=True)
     elif a.menu == 2:
-        folder = fd.pick_folder("Папка со стенками (.a3d). Результат — в подпапке «Чертежи».")
-        if folder:
-            run(folder, sides=a.sides, rot=a.rot, gui=True, open_pdf=True)
+        folder = fd.pick_folder(f"Папка со стенками (.a3d). Результат — в подпапке «{fd.out_folder_name()}».")
+        sides = (a.sides or fd.choose_sides("walls", TITLE)) if folder else None
+        if folder and sides:
+            run(folder, sides=sides, rot=a.rot, gui=True, open_pdf=True)
     elif a.menu == 3:
         if not path:
             msgbox("Нет активного сохранённого документа.")

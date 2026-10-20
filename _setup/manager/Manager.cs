@@ -23,12 +23,14 @@ namespace KompasPlugins
         [STAThread]
         static void Main(string[] args)
         {
-            string tab = null, plugin = "", errorFile = null, title = null;
-            bool report = false;
+            string tab = null, plugin = "", errorFile = null, title = null, section = "frame";
+            bool report = false, askSides = false;
             foreach (var a in args)
             {
                 if (a.StartsWith("--tab=")) tab = a.Substring(6);
                 else if (a == "--report") report = true;
+                else if (a == "--ask-sides") askSides = true;
+                else if (a.StartsWith("--section=")) section = a.Substring(10);
                 else if (a.StartsWith("--plugin=")) plugin = a.Substring(9);
                 else if (a.StartsWith("--error=")) errorFile = a.Substring(8);
                 else if (a.StartsWith("--title=")) title = a.Substring(8);
@@ -36,7 +38,14 @@ namespace KompasPlugins
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
             var root = Path.GetDirectoryName(Application.ExecutablePath);
-            if (report)
+            if (askSides)
+            {
+                // окно «Какие виды строить?» → код выхода: 1 — слева, 2 — справа, 3 — оба, 0 — отмена
+                var f = new SidesForm(root, section, title);
+                Application.Run(f);
+                Environment.ExitCode = f.Result;
+            }
+            else if (report)
                 Application.Run(new ReportForm(root, plugin, errorFile, title));
             else
                 Application.Run(new MainForm(tab));
@@ -598,6 +607,81 @@ namespace KompasPlugins
                 catch (Exception ex) { output = "Не удалось запустить Python: " + ex.Message; }
                 if (done != null && !owner.IsDisposed) owner.BeginInvoke(done, output);
             }) { IsBackground = true }.Start();
+        }
+    }
+
+    // ---------- окно «Какие виды строить?» (перед построением чертежей) ----------
+    class SidesForm : Form
+    {
+        public int Result;     // 1 — вид слева, 2 — вид справа, 3 — оба, 0 — отмена
+        readonly SettingsStore Store;
+        readonly string Section;
+        readonly CheckBox remember;
+
+        public SidesForm(string root, string section, string title)
+        {
+            Store = new SettingsStore(root);
+            Section = section;
+            Text = string.IsNullOrEmpty(title) ? "Чертежи рам" : title;
+            Font = new Font("Segoe UI", 10f);
+            AutoScaleMode = AutoScaleMode.Font;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            MaximizeBox = MinimizeBox = false;
+            StartPosition = FormStartPosition.CenterScreen;
+            TopMost = true;
+            KeyPreview = true;
+            try { Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath); } catch { }
+
+            Controls.Add(new Label { Text = "Какие виды строить?", Left = 16, Top = 14, AutoSize = true, Font = new Font(Font, FontStyle.Bold) });
+            var current = Current();      // что выбрано в настройках — кнопка по умолчанию
+            var choices = new[] { Tuple.Create("both", "Оба вида", 3), Tuple.Create("left", "Вид слева", 1), Tuple.Create("right", "Вид справа", 2) };
+            int x = 16;
+            foreach (var c in choices)
+            {
+                var code = c.Item3; var key = c.Item1;
+                var b = new Button { Text = c.Item2, Left = x, Top = 46, Width = 130, Height = 40 };
+                b.Click += (s, e) => Choose(code, key);
+                Controls.Add(b);
+                if (key == current) AcceptButton = b;
+                x += 140;
+            }
+            remember = new CheckBox { Text = "Больше не спрашивать (поменять — в настройках менеджера)", Left = 16, Top = 98, AutoSize = true };
+            Controls.Add(remember);
+            var cancel = new Button { Text = "Отмена", Left = 16 + 280 + 30, Top = 128, Width = 100, DialogResult = DialogResult.Cancel };
+            cancel.Click += (s, e) => { Result = 0; Close(); };
+            Controls.Add(cancel);
+            CancelButton = cancel;
+            ClientSize = new Size(16 + 3 * 140 + 24, 166);
+            cancel.Left = ClientSize.Width - 16 - cancel.Width;
+            // клавиши: Л/L — слева, П/R — справа, О/B — оба
+            KeyDown += (s, e) =>
+            {
+                if (e.KeyCode == Keys.L || e.KeyCode == Keys.K) Choose(1, "left");      // Л на русской раскладке = K
+                else if (e.KeyCode == Keys.R || e.KeyCode == Keys.G) Choose(2, "right"); // П = G
+                else if (e.KeyCode == Keys.B || e.KeyCode == Keys.J) Choose(3, "both");  // О = J
+            };
+            Shown += (s, e) => { Activate(); if (AcceptButton != null) ((Button)AcceptButton).Focus(); TopMost = false; };
+        }
+
+        string Current()
+        {
+            var it = Store.Sections.SelectMany(s => s.Items).FirstOrDefault(i => i.Section == Section && i.Key == "sides");
+            return it != null ? Store.Get(it) : "both";
+        }
+
+        void Choose(int code, string key)
+        {
+            Result = code;
+            if (remember.Checked)
+            {
+                foreach (var it in Store.Sections.SelectMany(s => s.Items).Where(i => i.Section == Section))
+                {
+                    if (it.Key == "sides") Store.Set(it, key);
+                    if (it.Key == "ask_sides") Store.Set(it, "false");
+                }
+                try { Store.Save(); } catch { }
+            }
+            Close();
         }
     }
 

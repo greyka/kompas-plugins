@@ -1,70 +1,337 @@
 {
   "sections": [
     {
-      "id": "general", "title": "Общие",
+      "id": "general",
+      "title": "Общие",
       "items": [
-        {"key": "out_folder",   "type": "text", "default": "Чертежи",    "label": "Папка для результата", "help": "Создаётся рядом со сборками"},
-        {"key": "left_folder",  "type": "text", "default": "Вид слева",  "label": "Подпапка «вид слева»"},
-        {"key": "right_folder", "type": "text", "default": "Вид справа", "label": "Подпапка «вид справа»"},
-        {"key": "overwrite",    "type": "bool", "default": true,          "label": "Перезаписывать готовые чертежи", "help": "Если выключено — уже построенные чертежи пропускаются"}
+        {
+          "key": "out_folder",
+          "type": "text",
+          "default": "Чертежи",
+          "label": "Папка для результата",
+          "help": "Создаётся рядом со сборками"
+        },
+        {
+          "key": "left_folder",
+          "type": "text",
+          "default": "Вид слева",
+          "label": "Подпапка «вид слева»"
+        },
+        {
+          "key": "right_folder",
+          "type": "text",
+          "default": "Вид справа",
+          "label": "Подпапка «вид справа»"
+        },
+        {
+          "key": "overwrite",
+          "type": "bool",
+          "default": true,
+          "label": "Перезаписывать готовые чертежи",
+          "help": "Если выключено — уже построенные чертежи пропускаются"
+        }
       ]
     },
     {
-      "id": "frame", "title": "Чертежи рам",
+      "id": "frame",
+      "title": "Чертежи рам",
       "items": [
-        {"key": "sides", "type": "choice", "default": "both", "label": "Какие виды строить",
-         "choices": [["both", "Вид слева и вид справа"], ["left", "Только вид слева"], ["right", "Только вид справа"]]},
-        {"key": "pdf",          "type": "bool", "default": true,  "label": "Сохранять PDF рядом с .cdw"},
-        {"key": "open_after",   "type": "bool", "default": true,  "label": "Открывать чертежи после построения", "help": "Для команды «из текущей сборки»"},
-        {"key": "show_title",   "type": "bool", "default": true,  "label": "Подпись вида над рамой"},
-        {"key": "ordinate_from", "type": "choice", "default": "start", "label": "Отметки по стойкам",
-         "choices": [["start", "От начала профиля"], ["center", "По оси профиля"]]},
-        {"key": "overall_dims", "type": "bool", "default": true,  "label": "Габаритные размеры"},
-        {"key": "diagonal",     "type": "bool", "default": true,  "label": "Размер диагонали"},
-        {"key": "leaders",      "type": "bool", "default": true,  "label": "Позиционные выноски"},
-        {"key": "table",        "type": "bool", "default": true,  "label": "Таблица профилей"},
-        {"key": "hardware",     "type": "bool", "default": true,  "label": "Крепёж в таблице"},
-        {"key": "max_scale", "type": "choice", "default": "25", "label": "Самый мелкий масштаб",
-         "help": "Если рама не помещается — берётся лист больше",
-         "choices": [["10", "1:10"], ["15", "1:15"], ["20", "1:20"], ["25", "1:25"], ["40", "1:40"], ["50", "1:50"], ["100", "1:100"]]},
-        {"key": "min_format", "type": "choice", "default": "A3", "label": "Наименьший формат листа",
-         "choices": [["A3", "A3"], ["A2", "A2"], ["A1", "A1"]]},
-        {"key": "designer",     "type": "text", "default": "", "label": "Штамп: Разраб.", "help": "Пусто — не заполнять"},
-        {"key": "checker",      "type": "text", "default": "", "label": "Штамп: Пров."},
-        {"key": "organization", "type": "text", "default": "", "label": "Штамп: организация"}
+        {
+          "key": "sides",
+          "type": "choice",
+          "default": "both",
+          "label": "Какие виды строить",
+          "choices": [
+            [
+              "both",
+              "Вид слева и вид справа"
+            ],
+            [
+              "left",
+              "Только вид слева"
+            ],
+            [
+              "right",
+              "Только вид справа"
+            ]
+          ]
+        },
+        {
+          "key": "ask_sides",
+          "type": "bool",
+          "default": true,
+          "label": "Спрашивать при каждом построении",
+          "help": "Окно с выбором: вид слева / справа / оба. Выключено — берётся «Какие виды строить»"
+        },
+        {
+          "key": "pdf",
+          "type": "bool",
+          "default": true,
+          "label": "Сохранять PDF рядом с .cdw"
+        },
+        {
+          "key": "open_after",
+          "type": "bool",
+          "default": true,
+          "label": "Открывать чертежи после построения",
+          "help": "Для команды «из текущей сборки»"
+        },
+        {
+          "key": "show_title",
+          "type": "bool",
+          "default": true,
+          "label": "Подпись вида над рамой"
+        },
+        {
+          "key": "ordinate_from",
+          "type": "choice",
+          "default": "start",
+          "label": "Отметки по стойкам",
+          "choices": [
+            [
+              "start",
+              "От начала профиля"
+            ],
+            [
+              "center",
+              "По оси профиля"
+            ]
+          ]
+        },
+        {
+          "key": "overall_dims",
+          "type": "bool",
+          "default": true,
+          "label": "Габаритные размеры"
+        },
+        {
+          "key": "diagonal",
+          "type": "bool",
+          "default": true,
+          "label": "Размер диагонали"
+        },
+        {
+          "key": "leaders",
+          "type": "bool",
+          "default": true,
+          "label": "Позиционные выноски"
+        },
+        {
+          "key": "table",
+          "type": "bool",
+          "default": true,
+          "label": "Таблица профилей"
+        },
+        {
+          "key": "hardware",
+          "type": "bool",
+          "default": true,
+          "label": "Крепёж в таблице"
+        },
+        {
+          "key": "max_scale",
+          "type": "choice",
+          "default": "25",
+          "label": "Самый мелкий масштаб",
+          "help": "Если рама не помещается — берётся лист больше",
+          "choices": [
+            [
+              "10",
+              "1:10"
+            ],
+            [
+              "15",
+              "1:15"
+            ],
+            [
+              "20",
+              "1:20"
+            ],
+            [
+              "25",
+              "1:25"
+            ],
+            [
+              "40",
+              "1:40"
+            ],
+            [
+              "50",
+              "1:50"
+            ],
+            [
+              "100",
+              "1:100"
+            ]
+          ]
+        },
+        {
+          "key": "min_format",
+          "type": "choice",
+          "default": "A3",
+          "label": "Наименьший формат листа",
+          "choices": [
+            [
+              "A3",
+              "A3"
+            ],
+            [
+              "A2",
+              "A2"
+            ],
+            [
+              "A1",
+              "A1"
+            ]
+          ]
+        },
+        {
+          "key": "designer",
+          "type": "text",
+          "default": "",
+          "label": "Штамп: Разраб.",
+          "help": "Пусто — не заполнять"
+        },
+        {
+          "key": "checker",
+          "type": "text",
+          "default": "",
+          "label": "Штамп: Пров."
+        },
+        {
+          "key": "organization",
+          "type": "text",
+          "default": "",
+          "label": "Штамп: организация"
+        }
       ]
     },
     {
-      "id": "walls", "title": "Общий PDF стенок",
+      "id": "walls",
+      "title": "Общий PDF стенок",
       "items": [
-        {"key": "sides", "type": "choice", "default": "both", "label": "Какие виды в PDF",
-         "choices": [["both", "Вид слева и вид справа"], ["left", "Только вид слева"], ["right", "Только вид справа"]]},
-        {"key": "pdf_name", "type": "text", "default": "{папка} — все стенки", "label": "Имя общего PDF", "help": "{папка} — имя папки со стенками"},
-        {"key": "open_pdf", "type": "bool", "default": true, "label": "Открыть PDF после сборки"}
+        {
+          "key": "sides",
+          "type": "choice",
+          "default": "both",
+          "label": "Какие виды в PDF",
+          "choices": [
+            [
+              "both",
+              "Вид слева и вид справа"
+            ],
+            [
+              "left",
+              "Только вид слева"
+            ],
+            [
+              "right",
+              "Только вид справа"
+            ]
+          ]
+        },
+        {
+          "key": "ask_sides",
+          "type": "bool",
+          "default": true,
+          "label": "Спрашивать при каждом построении",
+          "help": "Окно с выбором: вид слева / справа / оба. Выключено — берётся «Какие виды строить»"
+        },
+        {
+          "key": "pdf_name",
+          "type": "text",
+          "default": "{папка} — все стенки",
+          "label": "Имя общего PDF",
+          "help": "{папка} — имя папки со стенками"
+        },
+        {
+          "key": "open_pdf",
+          "type": "bool",
+          "default": true,
+          "label": "Открыть PDF после сборки"
+        }
       ]
     },
     {
-      "id": "check", "title": "Проверка чертежа",
+      "id": "check",
+      "title": "Проверка чертежа",
       "items": [
-        {"key": "touch_gap",   "type": "float", "default": 1.0,  "min": 0, "max": 10, "label": "Зазор «вплотную», мм", "help": "Надписи ближе этого считаются стоящими вплотную"},
-        {"key": "overlap_min", "type": "float", "default": 15,   "min": 1, "max": 100, "label": "Наложение, % площади", "help": "С какой доли перекрытия надписей сообщать о наложении"},
-        {"key": "open_report", "type": "bool",  "default": true, "label": "Открывать справку после проверки"}
+        {
+          "key": "touch_gap",
+          "type": "float",
+          "default": 1.0,
+          "min": 0,
+          "max": 10,
+          "label": "Зазор «вплотную», мм",
+          "help": "Надписи ближе этого считаются стоящими вплотную"
+        },
+        {
+          "key": "overlap_min",
+          "type": "float",
+          "default": 15,
+          "min": 1,
+          "max": 100,
+          "label": "Наложение, % площади",
+          "help": "С какой доли перекрытия надписей сообщать о наложении"
+        },
+        {
+          "key": "open_report",
+          "type": "bool",
+          "default": true,
+          "label": "Открывать справку после проверки"
+        }
       ]
     },
     {
-      "id": "pdf", "title": "PDF из чертежей",
+      "id": "pdf",
+      "title": "PDF из чертежей",
       "items": [
-        {"key": "natural_sort", "type": "bool", "default": true, "label": "Сортировка «Ст2 раньше Ст10»"},
-        {"key": "bookmarks",    "type": "bool", "default": true, "label": "Закладки в PDF"},
-        {"key": "open_pdf",     "type": "bool", "default": true, "label": "Открыть PDF после сборки"}
+        {
+          "key": "natural_sort",
+          "type": "bool",
+          "default": true,
+          "label": "Сортировка «Ст2 раньше Ст10»"
+        },
+        {
+          "key": "bookmarks",
+          "type": "bool",
+          "default": true,
+          "label": "Закладки в PDF"
+        },
+        {
+          "key": "open_pdf",
+          "type": "bool",
+          "default": true,
+          "label": "Открыть PDF после сборки"
+        }
       ]
     },
     {
-      "id": "update", "title": "Обновление",
+      "id": "update",
+      "title": "Обновление",
       "items": [
-        {"key": "auto",    "type": "bool",   "default": true, "label": "Проверять обновления при входе в Windows"},
-        {"key": "channel", "type": "choice", "default": "releases", "label": "Что устанавливать",
-         "choices": [["releases", "Только выпущенные версии (рекомендуется)"], ["main", "Последние изменения (для проверки)"]]}
+        {
+          "key": "auto",
+          "type": "bool",
+          "default": true,
+          "label": "Проверять обновления при входе в Windows"
+        },
+        {
+          "key": "channel",
+          "type": "choice",
+          "default": "releases",
+          "label": "Что устанавливать",
+          "choices": [
+            [
+              "releases",
+              "Только выпущенные версии (рекомендуется)"
+            ],
+            [
+              "main",
+              "Последние изменения (для проверки)"
+            ]
+          ]
+        }
       ]
     }
   ]
