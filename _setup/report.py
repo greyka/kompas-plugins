@@ -93,7 +93,8 @@ def start_log(plugin):
         return path
     _state["log"] = path
     f.write(f"\n===== {time.strftime('%Y-%m-%d %H:%M:%S')}  {plugin}  v{version()}  "
-            f"{platform.node()}\\{getpass.getuser()}  argv={sys.argv[1:]}\n")
+            f"{platform.node()}\\{getpass.getuser()}  argv={sys.argv[1:]}\n"
+            f"      запущен из: {os.path.abspath(sys.argv[0]) if sys.argv and sys.argv[0] else '?'}\n")
     f.flush()
     sys.stdout, sys.stderr = _Tee(sys.stdout, f), _Tee(sys.stderr, f)
     return path
