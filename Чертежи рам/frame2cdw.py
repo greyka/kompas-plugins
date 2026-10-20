@@ -95,10 +95,45 @@ def find_open_doc(api7, path):
     return None
 
 
+class KompasBusy(RuntimeError):
+    """КОМПАС вернул пустой объект (занят, показал своё окно) — имеет смысл подождать и повторить."""
+
+
+class NotAFrame(RuntimeError):
+    """В сборке нет профилей металлоконструкций (сборка блока, пол, потолок…) — пропускаем, не ошибка."""
+
+
+RETRY_WAITS = (2, 5, 10)   # секунды между повторами, если КОМПАС не ответил
+
+
+def need(obj, what):
+    if obj is None:
+        raise KompasBusy(f"КОМПАС не выполнил «{what}» (был занят или показал своё окно)")
+    return obj
+
+
+def with_retry(fn, *args, **kw):
+    """Вызов с повторами при KompasBusy: 19.10 у Димы КОМПАС ~минуту отвечал «пусто» на открытие
+    и создание документов, потом сам пришёл в норму — без повтора выпало 9 сборок подряд."""
+    import time
+    for wait in RETRY_WAITS + (None,):
+        try:
+            return fn(*args, **kw)
+        except KompasBusy as e:
+            if wait is None:
+                raise
+            print(f"  {e} — повтор через {wait} с")
+            time.sleep(wait)
+
+
 def read_frame(api7, path):
+    return with_retry(_read_frame, api7, path)
+
+
+def _read_frame(api7, path):
     """Читает уже открытый в КОМПАС документ (и не закрывает его) или открывает файл скрыто."""
     opened = find_open_doc(api7, path)
-    doc = opened or api7.Documents.Open(path, False, True)
+    doc = opened or need(api7.Documents.Open(path, False, True), "открыть сборку")
     try:
         top = CastTo(doc, "IKompasDocument3D").TopPart
         P = prop_values(api7, doc)
@@ -121,7 +156,7 @@ def read_frame(api7, path):
                                pos=int(pos) if pos not in (None, "") else None,
                                box=(x1, y1, z1, x2, y2, z2)))
         if not bodies:
-            raise RuntimeError("в сборке нет профилей металлоконструкций")
+            raise NotAFrame("в сборке нет профилей металлоконструкций — не рама, пропущено")
         # стандартные изделия / детали первого уровня (крепёж и т.п.) — в таблицу
         hardware = OrderedDict()
         for i in range(top.Parts.Count):
@@ -279,12 +314,31 @@ def fmt_len(v):
 
 
 def build_drawing(api7, a3d, info, bodies, out_cdw, side="left"):
+    return with_retry(_build_drawing_safe, api7, a3d, info, bodies, out_cdw, side)
+
+
+def _build_drawing_safe(api7, a3d, info, bodies, out_cdw, side):
+    """Недостроенный чертёж при ошибке закрываем — иначе в КОМПАС копятся скрытые документы."""
+    created = []
+    try:
+        return _build_drawing(api7, a3d, info, bodies, out_cdw, side, created)
+    except Exception:
+        for d in created:
+            try:
+                d.Close(0)
+            except Exception:
+                pass
+        raise
+
+
+def _build_drawing(api7, a3d, info, bodies, out_cdw, side, created):
     u, v, thin, lo, hi = frame_axes(bodies)
     W, H = hi[u] - lo[u], hi[v] - lo[v]
     fmt, fw, fh, n = pick_layout(W, H)
     scale = 1.0 / n
 
-    doc = api7.Documents.Add(ksDocumentDrawing, False)
+    doc = need(api7.Documents.Add(ksDocumentDrawing, False), "создать чертёж")
+    created.append(CastTo(doc, "IKompasDocument"))
     doc2d = CastTo(doc, "IKompasDocument2D")
     sheet = CastTo(doc2d.LayoutSheets.Item(0), "ILayoutSheet")
     sf = CastTo(sheet.Format, "ISheetFormat")
@@ -296,7 +350,7 @@ def build_drawing(api7, a3d, info, bodies, out_cdw, side="left"):
     title, mirrored = SIDES[side]
     pname = pick_projection(views, a3d, lo, hi, u, v, thin, mirrored)
 
-    view = CastTo(views.Add(vt_Arbitrary), "IAssociationView")
+    view = CastTo(need(views.Add(vt_Arbitrary), "создать вид"), "IAssociationView")
     view.SourceFileName = a3d
     view.ProjectionName = pname
     view.Scale = scale
@@ -427,7 +481,7 @@ def build_drawing(api7, a3d, info, bodies, out_cdw, side="left"):
 def pick_projection(views, a3d, lo, hi, u, v, thin, mirrored=False):
     """Временный вид: проекция, где рама видна плоско и вертикаль вверх.
     mirrored=False — ось X модели направлена вправо (вид слева), True — влево (вид справа)."""
-    probe = CastTo(views.Add(vt_Arbitrary), "IAssociationView")
+    probe = CastTo(need(views.Add(vt_Arbitrary), "создать вид"), "IAssociationView")
     probe.SourceFileName = a3d
     found = None
     try:
@@ -650,6 +704,8 @@ def run(a):
         msg = f"Готово чертежей: {ok}, сборок: {len(files)}\nПапка: {out}"
         if getattr(a, "skipped", 0):
             msg += f"\nПропущено готовых: {a.skipped} (перезапись выключена в настройках)"
+        if getattr(a, "not_frames", None):
+            msg += "\nПропущены — не рамы (нет профилей): " + ", ".join(a.not_frames)
         if errors:
             msg += "\n\nОшибки:\n" + "\n".join(errors[:15])
         if fail:
@@ -667,6 +723,10 @@ def process(api7, a, files, out):
         base = os.path.splitext(os.path.basename(f))[0]
         try:
             info, bodies = read_frame(api7, f)
+        except NotAFrame:
+            a.not_frames = getattr(a, "not_frames", []) + [base]
+            print(f"--  {base}: нет профилей металлоконструкций — не рама, пропуск")
+            continue
         except Exception as e:
             fail += 1
             errors.append(f"{base}: {e}")

@@ -51,6 +51,9 @@ def build_all(api7, files, out, sides):
         print(f"[{n}/{len(files)}] {base}")
         try:
             info, bodies = fd.read_frame(api7, f)
+        except fd.NotAFrame:
+            print(f"--  {base}: не рама (нет профилей), пропуск")
+            continue
         except Exception as e:
             errors.append(f"{base}: {e}")
             traceback.print_exc()
