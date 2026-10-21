@@ -21,6 +21,7 @@ import traceback
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "lib"))                           # pypdf
+sys.path.insert(0, HERE)                    # cdwmerge (переносной Python сам папку скрипта не добавляет)
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "Чертежи рам"))  # общие функции КОМПАС
 
 import frame2cdw as fd  # noqa: E402
@@ -63,13 +64,15 @@ def ask_drawings(initial_dir=None):
     return [os.path.join(parts[0], p) for p in parts[1:] if p]
 
 
-def ask_target(initial_dir, default_name):
+def ask_target(initial_dir, default_name, ext="pdf"):
     import win32con
     import win32gui
+    filt, title = (("Чертёж КОМПАС (*.cdw)\0*.cdw\0", "Сохранить общий чертёж как") if ext == "cdw"
+                   else ("PDF (*.pdf)\0*.pdf\0", "Сохранить общий PDF как"))
     try:
         name, _, _ = win32gui.GetSaveFileNameW(
-            InitialDir=initial_dir or "", File=default_name, DefExt="pdf",
-            Filter="PDF (*.pdf)\0*.pdf\0", Title="Сохранить общий PDF как",
+            InitialDir=initial_dir or "", File=default_name, DefExt=ext,
+            Filter=filt, Title=title,
             Flags=win32con.OFN_OVERWRITEPROMPT | win32con.OFN_EXPLORER)
         return name
     except Exception:
@@ -192,34 +195,78 @@ def menu(a):
     if a.menu == 9:
         kpsettings.open_manager("pdf")
         return
-    if a.menu == 1:
+    # 1–3 → один PDF, 4–6 → один общий чертёж (.cdw); источник: выбрать / открытые / папка
+    if a.menu not in (1, 2, 3, 4, 5, 6):
+        return
+    to_cdw, how = a.menu >= 4, (a.menu - 1) % 3
+    what = "один общий чертёж" if to_cdw else "один PDF"
+    if how == 0:
         files = sort_files(collect(ask_drawings(start_dir)))
-    elif a.menu == 2:
+    elif how == 1:
         files = open_drawings(api7)
         if not files:
             msgbox("В КОМПАС нет открытых сохранённых чертежей.")
             return
-    elif a.menu == 3:
-        folder = fd.pick_folder("Папка с чертежами (.cdw, включая подпапки) → один PDF")
+    else:
+        folder = fd.pick_folder(f"Папка с чертежами (.cdw, включая подпапки) → {what}")
         files = sort_files(collect([folder])) if folder else []
         if folder and not files:
             msgbox(f"В папке нет чертежей .cdw:\n{folder}")
             return
-    else:
-        return
     if not files:
         return
     first_dir = os.path.dirname(files[0])
-    default = (os.path.basename(first_dir) or "Чертежи") + ".pdf"
-    target = ask_target(first_dir, default)
+    base = os.path.basename(first_dir) or "Чертежи"
+    if to_cdw:
+        target = ask_target(first_dir, f"{base} — общий чертёж.cdw", "cdw")
+        if target:
+            files = [f for f in files if os.path.normcase(f) != os.path.normcase(target)]
+            run_merge(files, target, api7)
+        return
+    target = ask_target(first_dir, base + ".pdf")
     if target:
         run(files, target, rot=a.rot, gui=True, open_pdf=True)
+
+
+def run_merge(files, target, api7=None, gui=True):
+    """Общий многолистовой чертёж из files; PDF рядом (настройка), открыть в КОМПАС (настройка)."""
+    import cdwmerge
+    started = False
+    if api7 is None:
+        api7, started = fd.connect_kompas()
+    hide = api7.HideMessage
+    api7.HideMessage = 1
+    try:
+        sheets, errors = cdwmerge.merge(api7, files, target)
+        pdf = None
+        if CFG.get("pdf", "merged_pdf"):
+            pdf = os.path.splitext(target)[0] + ".pdf"
+            if not fd.export_pdf(api7, target, pdf) or not os.path.isfile(pdf):
+                errors.append((target, "не удалось сделать PDF из общего чертежа"))
+                pdf = None
+    finally:
+        api7.HideMessage = hide
+    text = (f"Общий чертёж: листов {sheets} из {len(files)} чертежей\n{target}"
+            + (f"\nPDF: {pdf}" if pdf else ""))
+    text += fd.problems_text("Не вошли", [fd.problem(f, r) for f, r in errors])
+    print(text)
+    if gui:
+        if errors:
+            fd.kpreport.error_dialog(TITLE, text)
+        elif CFG.get("pdf", "open_merged"):
+            api7.Documents.Open(target, True, False)
+        else:
+            msgbox(text)
+    if started:
+        api7.Quit()
+    return target
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src", nargs="*", help="чертежи .cdw и/или папки")
-    ap.add_argument("-o", "--out", help="итоговый PDF")
+    ap.add_argument("-o", "--out", help="итоговый PDF (или .cdw с --merge)")
+    ap.add_argument("--merge", action="store_true", help="собрать общий чертёж .cdw вместо PDF")
     ap.add_argument("--menu", type=int)
     ap.add_argument("--rot")
     a = ap.parse_args()
@@ -231,8 +278,12 @@ def main():
             files = collect(a.src)
             if len(a.src) == 1 and os.path.isdir(a.src[0]):
                 files = sort_files(files)
-            target = a.out or os.path.join(os.path.dirname(files[0]) if files else ".", "Чертежи.pdf")
-            run(files, target)
+            if a.merge:
+                target = a.out or os.path.join(os.path.dirname(files[0]) if files else ".", "Общий чертёж.cdw")
+                run_merge([f for f in files if os.path.normcase(f) != os.path.normcase(target)], target, gui=False)
+            else:
+                target = a.out or os.path.join(os.path.dirname(files[0]) if files else ".", "Чертежи.pdf")
+                run(files, target)
         else:
             ap.error("укажите чертежи или папку")
     except Exception:

@@ -298,7 +298,7 @@
     },
     {
       "id": "pdf",
-      "title": "PDF из чертежей",
+      "title": "PDF и общий чертёж",
       "items": [
         {
           "key": "natural_sort",
@@ -317,6 +317,19 @@
           "type": "bool",
           "default": true,
           "label": "Открыть PDF после сборки"
+        },
+        {
+          "key": "open_merged",
+          "type": "bool",
+          "default": true,
+          "label": "Открыть общий чертёж после сборки"
+        },
+        {
+          "key": "merged_pdf",
+          "type": "bool",
+          "default": true,
+          "label": "PDF рядом с общим чертежом",
+          "help": "Многостраничный PDF из общего чертежа"
         }
       ]
     },

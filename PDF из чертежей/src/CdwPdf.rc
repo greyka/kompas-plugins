@@ -9,6 +9,11 @@ BEGIN
     MENUITEM "Выбрать чертежи → один PDF...",         1
     MENUITEM "Открытые чертежи → один PDF...",        2
     MENUITEM "Все чертежи из папки → один PDF...",    3
+    MENUITEM SEPARATOR
+    MENUITEM "Выбрать чертежи → общий чертёж...",     4
+    MENUITEM "Открытые чертежи → общий чертёж...",    5
+    MENUITEM "Все чертежи из папки → общий чертёж...", 6
+    MENUITEM SEPARATOR
     MENUITEM "Настройки и версия...",                9
 END
 
