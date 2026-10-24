@@ -193,6 +193,22 @@
           ]
         },
         {
+          "key": "stamp_name",
+          "type": "choice",
+          "default": "file",
+          "label": "Штамп: наименование",
+          "choices": [
+            [
+              "file",
+              "Имя файла сборки (Ст4, Стенка…)"
+            ],
+            [
+              "model",
+              "Наименование из модели"
+            ]
+          ]
+        },
+        {
           "key": "designer",
           "type": "text",
           "default": "",

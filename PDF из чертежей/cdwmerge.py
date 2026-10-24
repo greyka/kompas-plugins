@@ -145,7 +145,7 @@ def merge(api7, files, target, log=print):
     dst2d = CastTo(dst, "IKompasDocument2D")
     dviews = CastTo(dst2d.ViewsAndLayersManager, "IViewsAndLayersManager").Views
     sysview = dviews.View(0)
-    sheets_used, origin, errors = 0, 0.0, []
+    sheets_used, origin, errors, names = 0, 0.0, [], []
     try:
         for f in files:
             opened = fd.find_open_doc(api7, f)
@@ -192,14 +192,12 @@ def merge(api7, files, target, log=print):
                     sst = CastTo(CastTo(src2d.LayoutSheets.Item(j), "ILayoutSheet").Stamp, "IStamp")
                     cell = lambda c: (CastTo(sst.Text(c), "IText").Str if sst.IsCellPresent(c) else "")  # noqa: E731
                     try:
-                        name, mass = cell(1), cell(5)
+                        mass = cell(5)
                     except Exception:
-                        name, mass = "", ""
-                    x0 = sum(sheet_size(dst2d.LayoutSheets.Item(k))[0] for k in range(sheets_used + j))
-                    h = sheet_size(dst2d.LayoutSheets.Item(sheets_used + j))[1]
+                        mass = ""
+                    # наименование листа — из имени файла (Ст4, Стенка под металл двери…)
                     base = os.path.splitext(os.path.basename(f))[0]
-                    label_sheet(dst2d, dviews, x0, h, f"{base}" + (f" — {name}" if name and name != base else "")
-                                + (f", масса {mass} кг" if mass else ""))
+                    names.append((sheets_used + j, base if n_src == 1 else f"{base} (лист {j + 1})", mass))
                     log(f"    штамп листа {sheets_used + j + 1}: ячеек {n}")
                 sheets_used += n_src
                 log(f"[{sheets_used}] {os.path.basename(f)}")
@@ -214,18 +212,24 @@ def merge(api7, files, target, log=print):
         # лишние пустые листы (если последние источники не открылись)
         while dst2d.LayoutSheets.Count > sheets_used:
             CastTo(dst2d.LayoutSheets.Item(dst2d.LayoutSheets.Count - 1), "ILayoutSheet").Delete()
-        # наименование в штампе — общее для всех листов: имя общего чертежа
-        try:
-            st = CastTo(CastTo(dst2d.LayoutSheets.Item(0), "ILayoutSheet").Stamp, "IStamp")
-            CastTo(st.Text(1), "IText").Str = os.path.splitext(os.path.basename(target))[0]
-            st.Update()
-            for k in range(dst2d.LayoutSheets.Count):            # масса — у каждого листа своя (в подписи)
-                s = CastTo(CastTo(dst2d.LayoutSheets.Item(k), "ILayoutSheet").Stamp, "IStamp")
-                if s.IsCellPresent(5):
-                    CastTo(s.Text(5), "IText").Str = ""
-                    s.Update()
-        except Exception:
-            pass
+        # наименование (из имени файла) и масса — в штамп каждого листа. Пишем в самом конце, когда
+        # все листы уже созданы и оформлены: иначе у последующих листов запись не держится.
+        for k, name, mass in names:
+            try:
+                st = CastTo(CastTo(dst2d.LayoutSheets.Item(k), "ILayoutSheet").Stamp, "IStamp")
+                CastTo(st.Text(1), "IText").Str = name
+                if st.IsCellPresent(5):
+                    CastTo(st.Text(5), "IText").Str = mass
+                st.Update()
+            except Exception as e:
+                log(f"    штамп листа {k + 1}: {e}")
+        # проверка: если КОМПАС всё же сделал наименование общим — подпись на самом листе
+        for k, name, mass in names:
+            st = CastTo(CastTo(dst2d.LayoutSheets.Item(k), "ILayoutSheet").Stamp, "IStamp")
+            if CastTo(st.Text(1), "IText").Str != name:
+                x0 = sum(sheet_size(dst2d.LayoutSheets.Item(i))[0] for i in range(k))
+                label_sheet(dst2d, dviews, x0, sheet_size(dst2d.LayoutSheets.Item(k))[1],
+                            name + (f", масса {mass} кг" if mass else ""))
         os.makedirs(os.path.dirname(os.path.abspath(target)), exist_ok=True)
         CastTo(dst2d, "IKompasDocument").SaveAs(target)
     finally:

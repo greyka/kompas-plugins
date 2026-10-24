@@ -569,7 +569,10 @@ def _build_drawing(api7, a3d, info, bodies, out_cdw, side, created):
     # основная надпись
     try:
         stamp = CastTo(sheet.Stamp, "IStamp")
-        CastTo(stamp.Text(1), "IText").Str = info["name"]
+        # наименование: имя файла сборки (Ст4, Стенка под металл двери…) или из модели — настройка
+        name = (os.path.splitext(os.path.basename(a3d))[0]
+                if CFG.get("frame", "stamp_name") == "file" else info["name"])
+        CastTo(stamp.Text(1), "IText").Str = name
         if info.get("marking"):
             CastTo(stamp.Text(2), "IText").Str = info["marking"]
         CastTo(stamp.Text(6), "IText").Str = f"1:{n:g}"
