@@ -435,6 +435,9 @@ namespace KompasPlugins
             RunPython("\"" + upd + "\" --root \"" + Root + "\" --check", true, output =>
             {
                 btnCheck.Enabled = true;
+                // версия могла смениться, пока менеджер открыт (обновление при входе в Windows)
+                lblInstalled.Text = ReadVersion();
+                Text = "Менеджер плагинов КОМПАС — версия " + ReadVersion();
                 try
                 {
                     var json = output.Split('\n').Last(l => l.Trim().StartsWith("{"));
