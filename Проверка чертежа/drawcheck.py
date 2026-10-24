@@ -34,7 +34,7 @@ FORMATS_MM = {1: (841, 594), 2: (594, 420), 3: (420, 297), 4: (297, 210)}
 
 def msgbox(text, error=False):
     import ctypes
-    ctypes.windll.user32.MessageBoxW(None, text, TITLE, 0x10 if error else 0x40)
+    ctypes.windll.user32.MessageBoxW(fd.owner(), text, TITLE, (0x10 if error else 0x40) | fd.MB_TOP)
 
 
 # --- чтение чертежа -------------------------------------------------------------

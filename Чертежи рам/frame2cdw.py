@@ -761,8 +761,8 @@ def menu(a):
             return
         if doc.Changed:
             r = ctypes.windll.user32.MessageBoxW(
-                None, "Сборка изменена. Сохранить перед построением чертежа?\n"
-                      "(вид чертежа строится по файлу на диске)", TITLE, 0x23)
+        owner(), "Сборка изменена. Сохранить перед построением чертежа?\n"
+                      "(вид чертежа строится по файлу на диске)", TITLE, 0x23 | MB_TOP)
             if r == 2:      # Отмена
                 return
             if r == 6:      # Да
@@ -785,11 +785,28 @@ def menu(a):
         os.startfile(d if os.path.isdir(d) else os.path.dirname(path))
 
 
+OWNER = 0          # главное окно КОМПАС — владелец всех окон плагина (иначе окна открываются
+                   # свёрнутыми или под КОМПАС: у pythonw нет своего окна; найдено 24.10)
+MB_TOP = 0x10000 | 0x40000     # MB_SETFOREGROUND | MB_TOPMOST
+
+
+def owner():
+    """Окно-владелец для диалогов и сообщений: главное окно КОМПАС, иначе активное окно."""
+    import win32gui
+    h = OWNER or win32gui.GetForegroundWindow()
+    try:
+        if h and win32gui.IsIconic(h) == 0:
+            win32gui.SetForegroundWindow(h)
+    except Exception:
+        pass
+    return h
+
+
 def pick_folder(title):
     """Стандартный диалог выбора папки Windows (без tkinter — его нет в переносном Python)."""
     from win32com.shell import shell, shellcon
     pidl, _, _ = shell.SHBrowseForFolder(
-        0, None, title, shellcon.BIF_RETURNONLYFSDIRS | 0x40)  # 0x40 = BIF_NEWDIALOGSTYLE
+        owner(), None, title, shellcon.BIF_RETURNONLYFSDIRS | 0x40)  # 0x40 = BIF_NEWDIALOGSTYLE
     if not pidl:
         return None
     path = shell.SHGetPathFromIDList(pidl)
@@ -810,7 +827,13 @@ def connect_kompas(rot_name=None):
         for mk in rot:
             if mk.GetDisplayName(ctx, None).lstrip("!") == rot_name:
                 obj = rot.GetObject(mk).QueryInterface(pythoncom.IID_IDispatch)
-                return gencache.EnsureDispatch(obj), False
+                api7 = gencache.EnsureDispatch(obj)
+                global OWNER
+                try:
+                    OWNER = int(api7.MainWindowHandle)
+                except Exception:
+                    pass
+                return api7, False
         raise RuntimeError("Не найден КОМПАС, из которого вызвана команда. Перезапустите КОМПАС.")
     try:
         return gencache.EnsureDispatch(win32com.client.GetActiveObject("Kompas.Application.7")), False
@@ -832,7 +855,8 @@ def kompas_running():
 
 def msgbox(text, error=False):
     import ctypes
-    ctypes.windll.user32.MessageBoxW(None, text, TITLE, 0x10 if error else 0x40)
+    ctypes.windll.user32.MessageBoxW(
+        owner(), text, TITLE, (0x10 if error else 0x40) | MB_TOP)
 
 
 def run(a):

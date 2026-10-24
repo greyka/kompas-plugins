@@ -32,7 +32,7 @@ TITLE = f"Общий PDF стенок — версия {kpsettings.version()}"
 
 def msgbox(text, error=False):
     import ctypes
-    ctypes.windll.user32.MessageBoxW(None, text, TITLE, 0x10 if error else 0x40)
+    ctypes.windll.user32.MessageBoxW(fd.owner(), text, TITLE, (0x10 if error else 0x40) | fd.MB_TOP)
 
 
 def list_assemblies(src):

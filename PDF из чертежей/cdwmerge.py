@@ -138,6 +138,25 @@ def drop_designation_texts(view):
             pass
 
 
+def sheet_names(items):
+    """[(лист, файл, № листа источника|None, масса)] → [(лист, наименование, масса)].
+    Наименование — имя файла; одинаковые имена из разных папок различаем папкой:
+    «Ст4 — Вид слева», «Ст4 — Вид справа» (24.10: оба листа были «Ст4»)."""
+    stem = lambda f: os.path.splitext(os.path.basename(f))[0]  # noqa: E731
+    dirs = {}
+    for _, f, _, _ in items:
+        dirs.setdefault(stem(f).lower(), set()).add(os.path.normcase(os.path.dirname(os.path.abspath(f))))
+    out = []
+    for k, f, j, mass in items:
+        name = stem(f)
+        if len(dirs[name.lower()]) > 1:
+            name += " — " + os.path.basename(os.path.dirname(os.path.abspath(f)))
+        if j is not None:
+            name += f" (лист {j + 1})"
+        out.append((k, name, mass))
+    return out
+
+
 def merge(api7, files, target, log=print):
     """→ (листов, ошибки [(файл, причина)]). Общий чертёж сохраняется в target."""
     import frame2cdw as fd
@@ -196,8 +215,7 @@ def merge(api7, files, target, log=print):
                     except Exception:
                         mass = ""
                     # наименование листа — из имени файла (Ст4, Стенка под металл двери…)
-                    base = os.path.splitext(os.path.basename(f))[0]
-                    names.append((sheets_used + j, base if n_src == 1 else f"{base} (лист {j + 1})", mass))
+                    names.append((sheets_used + j, f, j if n_src > 1 else None, mass))
                     log(f"    штамп листа {sheets_used + j + 1}: ячеек {n}")
                 sheets_used += n_src
                 log(f"[{sheets_used}] {os.path.basename(f)}")
@@ -212,6 +230,7 @@ def merge(api7, files, target, log=print):
         # лишние пустые листы (если последние источники не открылись)
         while dst2d.LayoutSheets.Count > sheets_used:
             CastTo(dst2d.LayoutSheets.Item(dst2d.LayoutSheets.Count - 1), "ILayoutSheet").Delete()
+        names = sheet_names(names)
         # наименование (из имени файла) и масса — в штамп каждого листа. Пишем в самом конце, когда
         # все листы уже созданы и оформлены: иначе у последующих листов запись не держится.
         for k, name, mass in names:

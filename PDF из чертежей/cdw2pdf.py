@@ -36,7 +36,7 @@ ksDocumentDrawing = 1
 def msgbox(text, error=False, yesno=False):
     import ctypes
     flags = (0x10 if error else 0x40) | (0x04 if yesno else 0)
-    return ctypes.windll.user32.MessageBoxW(None, text, TITLE, flags)
+    return ctypes.windll.user32.MessageBoxW(fd.owner(), text, TITLE, flags | fd.MB_TOP)
 
 
 def natural_key(path):
@@ -51,7 +51,7 @@ def ask_drawings(initial_dir=None):
     import win32gui
     try:
         names, _, _ = win32gui.GetOpenFileNameW(
-            InitialDir=initial_dir or "",
+            hwndOwner=fd.owner(), InitialDir=initial_dir or "",
             Filter="Чертежи КОМПАС (*.cdw)\0*.cdw\0Все файлы (*.*)\0*.*\0",
             Title="Выберите чертежи (несколько — с Ctrl или Shift)",
             Flags=win32con.OFN_ALLOWMULTISELECT | win32con.OFN_EXPLORER | win32con.OFN_FILEMUSTEXIST,
@@ -71,7 +71,7 @@ def ask_target(initial_dir, default_name, ext="pdf"):
                    else ("PDF (*.pdf)\0*.pdf\0", "Сохранить общий PDF как"))
     try:
         name, _, _ = win32gui.GetSaveFileNameW(
-            InitialDir=initial_dir or "", File=default_name, DefExt=ext,
+            hwndOwner=fd.owner(), InitialDir=initial_dir or "", File=default_name, DefExt=ext,
             Filter=filt, Title=title,
             Flags=win32con.OFN_OVERWRITEPROMPT | win32con.OFN_EXPLORER)
         return name
@@ -215,8 +215,7 @@ def menu(a):
             return
     if not files:
         return
-    first_dir = os.path.dirname(files[0])
-    base = os.path.basename(first_dir) or "Чертежи"
+    first_dir, base = default_place(files)
     if to_cdw:
         target = ask_target(first_dir, f"{base} — общий чертёж.cdw", "cdw")
         if target:
@@ -226,6 +225,26 @@ def menu(a):
     target = ask_target(first_dir, base + ".pdf")
     if target:
         run(files, target, rot=a.rot, gui=True, open_pdf=True)
+
+
+def default_place(files):
+    """Куда предлагать сохранить и как назвать: общая папка чертежей; подпапки «Вид слева»,
+    «Вид справа», «Чертежи» пропускаем — имя берём по папке со сборками (24.10: было «Вид слева —
+    общий чертёж»). Сохранять — в папку «Чертежи», если чертежи лежат в ней."""
+    try:
+        common = os.path.commonpath([os.path.dirname(os.path.abspath(f)) for f in files])
+    except ValueError:                       # разные диски
+        common = os.path.dirname(os.path.abspath(files[0]))
+    out_name = fd.out_folder_name().lower()
+    skip = {out_name, fd.side_folder("left").lower(), fd.side_folder("right").lower()}
+    d, save_dir = common, common
+    while os.path.basename(d).lower() in skip and os.path.dirname(d) != d:
+        if os.path.basename(d).lower() == out_name:
+            save_dir = d
+        d = os.path.dirname(d)
+    if save_dir == common and os.path.basename(common).lower() in skip:
+        save_dir = os.path.join(d, fd.out_folder_name()) if os.path.isdir(os.path.join(d, fd.out_folder_name())) else common
+    return save_dir, (os.path.basename(d) or "Чертежи")
 
 
 def run_merge(files, target, api7=None, gui=True):
